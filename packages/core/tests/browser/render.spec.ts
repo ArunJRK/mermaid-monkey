@@ -114,6 +114,25 @@ type MultiInstanceProbe = {
   secondRendererNodeCount: number
 }
 
+type DestroyDuringMountProbe = {
+  mountErrorMessage: string | null
+  appReleased: boolean
+  keyHandlerReleased: boolean
+  resizeObserverReleased: boolean
+  canvasOwnershipReleased: boolean
+  keydownListenersReleased: boolean
+  fitCallsAfterKeydown: number
+  remountSucceeded: boolean
+  remountNodeCount: number
+}
+
+type KeyboardScopeProbeCounts = {
+  fitCalls: number
+  resetCalls: number
+  editorText: string
+  activeElementId: string
+}
+
 type DestroyCleanupProbe = {
   keyHandlerReleased: boolean
   visibilityHandlerReleased: boolean
@@ -3306,6 +3325,79 @@ graph TD
     expect(probe.viewportReleased).toBeTruthy()
     expect(probe.canvasReleased).toBeTruthy()
     expect(probe.canvasOwnershipReleased).toBeTruthy()
+    expect(pageErrors).toEqual([])
+  })
+
+  test('aborts an in-flight mount when destroy is called during initialization', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await page.goto('/lifecycle-harness.html')
+    await page.waitForFunction(() => Boolean((window as any).__LIFECYCLE_HARNESS__))
+
+    const probe = await page.evaluate(async (): Promise<DestroyDuringMountProbe> => {
+      return await (window as any).__LIFECYCLE_HARNESS__.runDestroyDuringMountProbe()
+    })
+
+    expect(probe.mountErrorMessage).toBeNull()
+    expect(probe.appReleased).toBeTruthy()
+    expect(probe.keyHandlerReleased).toBeTruthy()
+    expect(probe.resizeObserverReleased).toBeTruthy()
+    expect(probe.canvasOwnershipReleased).toBeTruthy()
+    expect(probe.keydownListenersReleased).toBeTruthy()
+    expect(probe.fitCallsAfterKeydown).toBe(0)
+    expect(probe.remountSucceeded).toBeTruthy()
+    expect(probe.remountNodeCount).toBeGreaterThan(0)
+    expect(pageErrors).toEqual([])
+  })
+
+  test('scopes keyboard shortcuts to the canvas and ignores editable embed hosts', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await page.goto('/lifecycle-harness.html')
+    await page.waitForFunction(() => Boolean((window as any).__LIFECYCLE_HARNESS__))
+
+    await page.evaluate(async () => {
+      await (window as any).__LIFECYCLE_HARNESS__.setupKeyboardScopeProbe()
+    })
+
+    const readCounts = async (): Promise<KeyboardScopeProbeCounts> => {
+      return await page.evaluate(() => {
+        return (window as any).__LIFECYCLE_HARNESS__.getKeyboardScopeCounts() as KeyboardScopeProbeCounts
+      })
+    }
+
+    try {
+      // Typing inside a contenteditable rich-text host must not drive the diagram.
+      await page.click('#keyboard-probe-editor')
+      await page.keyboard.press('f')
+      await page.keyboard.press('r')
+      let counts = await readCounts()
+      expect(counts.fitCalls).toBe(0)
+      expect(counts.resetCalls).toBe(0)
+      expect(counts.editorText).toContain('fr')
+
+      // Keydown elsewhere on the page (body focused) stays with the embedding page.
+      await page.evaluate(() => {
+        ;(document.activeElement as HTMLElement | null)?.blur()
+      })
+      await page.keyboard.press('f')
+      counts = await readCounts()
+      expect(counts.fitCalls).toBe(0)
+
+      // The focused canvas still receives fit and reset shortcuts.
+      const canvasFocused = await page.evaluate(() => {
+        return (window as any).__LIFECYCLE_HARNESS__.focusKeyboardScopeCanvas() as boolean
+      })
+      expect(canvasFocused).toBeTruthy()
+      await page.keyboard.press('f')
+      await page.keyboard.press('r')
+      counts = await readCounts()
+      expect(counts.fitCalls).toBe(1)
+      expect(counts.resetCalls).toBe(1)
+    } finally {
+      await page.evaluate(() => {
+        ;(window as any).__LIFECYCLE_HARNESS__.teardownKeyboardScopeProbe()
+      })
+    }
+
     expect(pageErrors).toEqual([])
   })
 

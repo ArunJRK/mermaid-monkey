@@ -20,7 +20,7 @@ import { NodeSprite } from './node-sprite'
 import { EdgeGraphic } from './edge-graphic'
 import { SubgraphContainer } from './subgraph-container'
 import { FoldManager } from '../interaction/fold-manager'
-import { mapKeyToAction } from '../interaction/keyboard'
+import { isEditableShortcutTarget, mapKeyToAction } from '../interaction/keyboard'
 import { NarrativeLayout } from '../layout/narrative-layout'
 import { resolveTheme, type Theme } from './theme'
 import { LinkPreview } from './link-preview'
@@ -87,6 +87,7 @@ export class MermaidRenderer {
   private _pointerActivityHandler: ((event: Event) => void) | null = null
   private _resizeObserver: ResizeObserver | null = null
   private _resizeRafId: number | null = null
+  private _canvasTabIndexAdded = false
   private _lastObservedCanvasSize: { width: number; height: number } | null = null
   private _colorSchemeMediaQuery: MediaQueryList | null = null
   private _colorSchemeChangeHandler: ((event: MediaQueryListEvent) => void) | null = null
@@ -108,6 +109,10 @@ export class MermaidRenderer {
 
   /**
    * Initialise PixiJS and attach to the given canvas element.
+   *
+   * If destroy() is called while mount() is still awaiting GPU setup,
+   * mount() aborts: it tears down whatever it had created, releases canvas
+   * ownership, and resolves without mounting.
    */
   async mount(canvas: HTMLCanvasElement): Promise<void> {
     if (this._destroyed) {
@@ -134,6 +139,12 @@ export class MermaidRenderer {
       }
     }
 
+    // destroy() may have been called while awaiting the adapter probe.
+    if (this._destroyed) {
+      await this._abortInFlightMount(canvas, null)
+      return
+    }
+
     const app = new Application()
     try {
       await app.init({
@@ -147,6 +158,10 @@ export class MermaidRenderer {
       })
     } catch (error) {
       MermaidRenderer._liveCanvases.delete(canvas)
+      if (this._destroyed) {
+        this._canvas = null
+        return
+      }
       this._canvas = canvas
       const message = `Rendering unavailable: ${
         error instanceof Error ? error.message : String(error)
@@ -154,6 +169,13 @@ export class MermaidRenderer {
       this._drawUnavailableState(message)
       throw new Error(message)
     }
+
+    // destroy() may have been called while the GPU context was initialising.
+    if (this._destroyed) {
+      await this._abortInFlightMount(canvas, app)
+      return
+    }
+
     this._app = app
     this._wireColorSchemeUpdates()
     this._wireResizeHandling(canvas)
@@ -199,18 +221,23 @@ export class MermaidRenderer {
       }
     })
 
-    // Keyboard shortcuts
+    // Keyboard shortcuts — scoped to the canvas (not the window) so embedding
+    // hosts such as rich-text editors keep their own keystrokes. The canvas is
+    // made focusable so it can receive keydown once the user interacts with it.
+    if (!canvas.hasAttribute('tabindex')) {
+      canvas.tabIndex = 0
+      this._canvasTabIndexAdded = true
+    }
     this._keyHandler = (e: KeyboardEvent) => {
-      // Don't intercept when typing in inputs
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      // Don't intercept typing in form controls or contenteditable hosts
+      if (isEditableShortcutTarget(e.target)) return
 
       const action = mapKeyToAction(e.key)
       if (action === 'fitToView') this.fitToView()
       else if (action === 'resetView') this.resetView()
       else if (action === 'focusOut') this.focusOut()
     }
-    window.addEventListener('keydown', this._keyHandler)
+    canvas.addEventListener('keydown', this._keyHandler)
 
     // Link preview popup — rendered inside the same PixiJS app (no second WebGL context)
     this._linkPreview = new LinkPreview(app)
@@ -227,9 +254,13 @@ export class MermaidRenderer {
 
     // Keyboard
     if (this._keyHandler) {
-      window.removeEventListener('keydown', this._keyHandler)
+      this._canvas?.removeEventListener('keydown', this._keyHandler)
       this._keyHandler = null
     }
+    if (this._canvas && this._canvasTabIndexAdded) {
+      this._canvas.removeAttribute('tabindex')
+    }
+    this._canvasTabIndexAdded = false
     if (this._webglContextLostHandler && this._canvas) {
       this._canvas.removeEventListener('webglcontextlost', this._webglContextLostHandler)
       this._webglContextLostHandler = null
@@ -1397,7 +1428,7 @@ export class MermaidRenderer {
     const handlers = this._keyHandler
 
     if (handlers) {
-      window.removeEventListener('keydown', handlers)
+      canvas.removeEventListener('keydown', handlers)
       this._keyHandler = null
     }
     if (this._webglContextLostHandler) {
@@ -1444,11 +1475,54 @@ export class MermaidRenderer {
 
     try {
       await this.mount(canvas)
+      // mount() resolves without mounting when destroy() raced the remount.
+      if (this._destroyed) return
       if (source) {
         await this.load(source, options)
       }
     } finally {
       this._setRuntimeActivity('context-recovery', false)
+    }
+  }
+
+  /**
+   * Best-effort teardown for a mount() that lost a race with destroy().
+   * Mirrors destroy() for the resources mount() had created so far, then
+   * restores the canvas's WebGL context so the embedder can mount a fresh
+   * renderer on the same canvas. (Pixi deliberately loses the context when a
+   * renderer is destroyed, and mounting onto a lost context hangs.)
+   */
+  private async _abortInFlightMount(canvas: HTMLCanvasElement, app: Application | null): Promise<void> {
+    if (app) {
+      const gl = (app.renderer as any)?.gl as WebGLRenderingContext | undefined
+      const loseContextExt = gl?.getExtension('WEBGL_lose_context') ?? null
+      const contextRestored = loseContextExt
+        ? new Promise<void>((resolve) => {
+            let settled = false
+            const onLost = (event: Event) => {
+              // Restoration is only allowed when the lost event is cancelled.
+              event.preventDefault()
+              window.setTimeout(() => loseContextExt.restoreContext(), 0)
+            }
+            const finish = () => {
+              if (settled) return
+              settled = true
+              canvas.removeEventListener('webglcontextlost', onLost)
+              canvas.removeEventListener('webglcontextrestored', finish)
+              resolve()
+            }
+            canvas.addEventListener('webglcontextlost', onLost)
+            canvas.addEventListener('webglcontextrestored', finish)
+            // Safety net: never leave the aborted mount() hanging.
+            window.setTimeout(finish, 1000)
+          })
+        : null
+      app.destroy(true, { children: true })
+      if (contextRestored) await contextRestored
+    }
+    MermaidRenderer._liveCanvases.delete(canvas)
+    if (this._canvas === canvas) {
+      this._canvas = null
     }
   }
 
