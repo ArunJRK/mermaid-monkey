@@ -278,6 +278,138 @@ describe('NarrativeLayout — positioning', () => {
   })
 })
 
+// ─── Horizontal Flows (LR / RL) ────────────────────────────────────
+
+/**
+ * Reproduction graph from a real production doc: a linear chain with a
+ * review-notes feedback loop and a decision branch.
+ *
+ *   script --> vo --> review{...} --notes--> vo
+ *   review --> motion --> assemble --> render
+ */
+function makeProductionPipelineGraph(direction: string): RenderGraph {
+  return makeGraph(
+    ['script', 'vo', 'review', 'motion', 'assemble', 'render'],
+    [
+      ['script', 'vo'],
+      ['vo', 'review'],
+      ['review', 'vo', 'notes'],
+      ['review', 'motion'],
+      ['motion', 'assemble'],
+      ['assemble', 'render'],
+    ],
+    { shapes: { review: 'diamond' }, direction },
+  )
+}
+
+const PIPELINE_CHAIN = ['script', 'vo', 'review', 'motion', 'assemble', 'render']
+
+describe('NarrativeLayout — horizontal flows (LR/RL)', () => {
+  it('spreads an LR chain along x instead of stacking nodes at one point', () => {
+    const graph = makeProductionPipelineGraph('LR')
+    const layout = new NarrativeLayout()
+    const result = layout.compute(graph)
+
+    const nodes = PIPELINE_CHAIN.map((id) => result.nodes.get(id)!)
+
+    // No two nodes may share the same point
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const samePoint = nodes[i].x === nodes[j].x && nodes[i].y === nodes[j].y
+        expect(samePoint, `${PIPELINE_CHAIN[i]} and ${PIPELINE_CHAIN[j]} share one point`).toBe(false)
+      }
+    }
+
+    // The chain advances monotonically along x (left to right)
+    for (let i = 1; i < nodes.length; i++) {
+      expect(nodes[i].x, `${PIPELINE_CHAIN[i]} should be right of ${PIPELINE_CHAIN[i - 1]}`)
+        .toBeGreaterThan(nodes[i - 1].x)
+    }
+
+    // All chain nodes are on the CENTER lane: lane discipline holds on y
+    for (let i = 1; i < nodes.length; i++) {
+      expect(nodes[i].y).toBe(nodes[0].y)
+    }
+  })
+
+  it('spreads an RL chain along x (right to left) without stacking', () => {
+    const graph = makeProductionPipelineGraph('RL')
+    const layout = new NarrativeLayout()
+    const result = layout.compute(graph)
+
+    const nodes = PIPELINE_CHAIN.map((id) => result.nodes.get(id)!)
+
+    // The chain advances monotonically along x (right to left)
+    for (let i = 1; i < nodes.length; i++) {
+      expect(nodes[i].x, `${PIPELINE_CHAIN[i]} should be left of ${PIPELINE_CHAIN[i - 1]}`)
+        .toBeLessThan(nodes[i - 1].x)
+    }
+
+    // Lane discipline still holds on y
+    for (let i = 1; i < nodes.length; i++) {
+      expect(nodes[i].y).toBe(nodes[0].y)
+    }
+  })
+
+  it('offsets off-spine branches on the y axis for LR flows and keeps dagre x', () => {
+    // A -> B{decision} -> C (spine-continuation) -> E
+    //                   -> D (branch)             -> E
+    const graph = makeGraph(
+      ['A', 'B', 'C', 'D', 'E'],
+      [
+        ['A', 'B'],
+        ['B', 'C'],
+        ['B', 'D'],
+        ['C', 'E'],
+        ['D', 'E'],
+      ],
+      { shapes: { B: 'diamond' }, direction: 'LR' },
+    )
+    const layout = new NarrativeLayout()
+    const result = layout.compute(graph)
+
+    const a = result.nodes.get('A')!
+    const b = result.nodes.get('B')!
+    const c = result.nodes.get('C')!
+    const d = result.nodes.get('D')!
+    const e = result.nodes.get('E')!
+
+    // Spine nodes share the CENTER lane on y
+    expect(a.y).toBe(b.y)
+    expect(b.y).toBe(c.y)
+
+    // Off-spine branch D is offset away from the center lane on y
+    expect(d.y).not.toBe(b.y)
+
+    // Merge node E returns to the center lane
+    expect(e.y).toBe(a.y)
+
+    // The flow still advances along x
+    expect(a.x).toBeLessThan(b.x)
+    expect(b.x).toBeLessThan(c.x)
+    expect(c.x).toBeLessThan(e.x)
+  })
+
+  it('keeps the TD reproduction chain on a single vertical lane (regression pin)', () => {
+    const graph = makeProductionPipelineGraph('TD')
+    const layout = new NarrativeLayout()
+    const result = layout.compute(graph)
+
+    const nodes = PIPELINE_CHAIN.map((id) => result.nodes.get(id)!)
+
+    // All chain nodes share the CENTER lane on x
+    for (let i = 1; i < nodes.length; i++) {
+      expect(nodes[i].x).toBe(nodes[0].x)
+    }
+
+    // The chain advances monotonically along y (top to bottom)
+    for (let i = 1; i < nodes.length; i++) {
+      expect(nodes[i].y, `${PIPELINE_CHAIN[i]} should be below ${PIPELINE_CHAIN[i - 1]}`)
+        .toBeGreaterThan(nodes[i - 1].y)
+    }
+  })
+})
+
 // ─── Edge Routing ──────────────────────────────────────────────────
 
 describe('NarrativeLayout — edge routing', () => {

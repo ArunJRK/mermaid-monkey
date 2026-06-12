@@ -37,22 +37,30 @@ function toRankDir(direction: string): 'TB' | 'LR' | 'BT' | 'RL' {
  *    with multiple outgoing edges), the first branch stays on the spine
  *    path (RIGHT), and the second branch goes LEFT.
  * 3. After a merge (node with multiple incoming edges), return to CENTER.
- * 4. Use dagre for vertical ordering, then override x-positions to enforce
- *    lane columns: LEFT = -laneWidth, CENTER = 0, RIGHT = +laneWidth.
- * 5. Edge routing: spine edges are straight vertical, cross-lane edges
- *    use smooth bezier curves.
+ * 4. Use dagre for ordering along the flow axis, then override the
+ *    cross-axis positions to enforce lanes. Lanes run parallel to the
+ *    flow direction: vertical flows (TB/BT) keep dagre's y and constrain
+ *    x into lane columns; horizontal flows (LR/RL) keep dagre's x and
+ *    constrain y into lane rows. LEFT = -laneOffset, CENTER = 0,
+ *    RIGHT = +laneOffset on the cross axis.
+ * 5. Edge routing: spine edges are straight along the flow axis,
+ *    cross-lane edges use smooth bezier curves.
  */
 export class NarrativeLayout implements LayoutEngine {
   private readonly config: PhilosophyConfig
   private readonly multiplier: number
   private readonly laneWidth: number
+  private readonly laneHeight: number
 
   constructor(options?: LayoutOptions) {
     const philosophy = options?.philosophy ?? 'narrative'
     this.config = getPhilosophyConfig(philosophy)
     this.multiplier = options?.spacingMultiplier ?? 1.0
-    // Lane width: wide enough that nodes in adjacent lanes never overlap
+    // Lane offsets: wide enough that nodes in adjacent lanes never overlap.
+    // Vertical flows offset lanes along x, so node widths set the gap;
+    // horizontal flows offset lanes along y, so node heights set the gap.
     this.laneWidth = (this.config.nodeMinWidth * 2 + this.config.nodeSep * 2) * this.multiplier
+    this.laneHeight = (this.config.nodeMinHeight * 2 + this.config.nodeSep * 2) * this.multiplier
   }
 
   compute(graph: RenderGraph): PositionedGraph {
@@ -76,47 +84,51 @@ export class NarrativeLayout implements LayoutEngine {
 
     // Step 1: Detect spine
     const spine = this.detectSpine(graph)
-    const spineSet = new Set(spine)
 
     // Step 2: Assign lanes
     const lanes = this.assignLanes(graph)
 
-    // Step 3: Use dagre to get vertical ordering (y-positions)
+    // Step 3: Use dagre to get node ordering along the flow axis
     const dagrePositions = this._runDagre(graph)
 
-    // Step 4: Override x-positions based on lane assignment
+    // Step 4: Override cross-axis positions based on lane assignment.
+    // Vertical flows (TB/BT) constrain x and keep dagre's y; horizontal
+    // flows (LR/RL) constrain y and keep dagre's x.
+    const horizontal = this._isHorizontal(graph.direction)
+    const laneOffset = horizontal ? this.laneHeight : this.laneWidth
     const cfg = this.config
     const m = this.multiplier
     const positionedNodes = new Map<string, PositionedNode>()
 
-    // Compute the center x from dagre's output (use the average x of spine nodes)
-    let centerX = 0
+    // Compute the lane center on the cross axis from dagre's output
+    // (use the average cross-axis position of spine nodes)
+    let laneCenter = 0
     let spineCount = 0
     for (const nodeId of spine) {
       const pos = dagrePositions.get(nodeId)
       if (pos) {
-        centerX += pos.x
+        laneCenter += horizontal ? pos.y : pos.x
         spineCount++
       }
     }
-    centerX = spineCount > 0 ? centerX / spineCount : 0
+    laneCenter = spineCount > 0 ? laneCenter / spineCount : 0
 
     for (const [id, node] of graph.nodes) {
       const dagrePos = dagrePositions.get(id)
       if (!dagrePos) continue
 
       const lane = lanes.get(id) ?? 'CENTER'
-      let x: number
+      let cross: number
       switch (lane) {
         case 'LEFT':
-          x = centerX - this.laneWidth
+          cross = laneCenter - laneOffset
           break
         case 'RIGHT':
-          x = centerX + this.laneWidth
+          cross = laneCenter + laneOffset
           break
         case 'CENTER':
         default:
-          x = centerX
+          cross = laneCenter
           break
       }
 
@@ -124,15 +136,15 @@ export class NarrativeLayout implements LayoutEngine {
 
       positionedNodes.set(id, {
         ...node,
-        x,
-        y: dagrePos.y,
+        x: horizontal ? dagrePos.x : cross,
+        y: horizontal ? cross : dagrePos.y,
         width,
         height,
       })
     }
 
     // Step 5: Route edges
-    const positionedEdges = this._routeEdges(graph.edges, positionedNodes, spineSet, lanes)
+    const positionedEdges = this._routeEdges(graph.edges, positionedNodes, lanes, horizontal)
 
     // Compute subgraph bounds
     const positionedSubgraphs = this._computeSubgraphBounds(graph, positionedNodes)
@@ -343,7 +355,16 @@ export class NarrativeLayout implements LayoutEngine {
   }
 
   /**
-   * Run dagre to get y-positions (vertical ordering) for all nodes.
+   * Whether the graph flows horizontally (LR/RL), meaning lanes constrain
+   * y and dagre's x carries the flow ordering.
+   */
+  private _isHorizontal(direction: string): boolean {
+    const rankDir = toRankDir(direction)
+    return rankDir === 'LR' || rankDir === 'RL'
+  }
+
+  /**
+   * Run dagre to get positions along the flow axis for all nodes.
    * Returns a map of nodeId -> { x, y, width, height } from dagre.
    */
   private _runDagre(graph: RenderGraph): Map<string, { x: number; y: number; width: number; height: number }> {
@@ -396,14 +417,15 @@ export class NarrativeLayout implements LayoutEngine {
 
   /**
    * Route edges with appropriate curves:
-   * - Spine edges (both endpoints in CENTER): straight vertical line
-   * - Cross-lane edges: smooth bezier with control points
+   * - Same-lane edges: straight line along the lane
+   * - Cross-lane edges: smooth bezier with control points easing the
+   *   cross-axis transition over the flow-axis distance
    */
   private _routeEdges(
     edges: RenderEdge[],
     nodes: Map<string, PositionedNode>,
-    spineSet: Set<string>,
     lanes: Map<string, Lane>,
+    horizontal: boolean,
   ): PositionedEdge[] {
     const positionedEdges: PositionedEdge[] = []
 
@@ -419,25 +441,32 @@ export class NarrativeLayout implements LayoutEngine {
       let points: Array<{ x: number; y: number }>
 
       if (isSameLane) {
-        // Straight vertical edge along the lane
+        // Straight edge along the lane
         points = [
           { x: srcNode.x, y: srcNode.y },
           { x: tgtNode.x, y: tgtNode.y },
         ]
       } else {
-        // Cross-lane: bezier curve with control points
-        // Control points at 1/3 and 2/3 of the y-distance,
-        // easing the x-transition
+        // Cross-lane: bezier curve with control points at 1/3 and 2/3 of
+        // the flow-axis distance, easing the cross-axis transition
         const dy = tgtNode.y - srcNode.y
         const dx = tgtNode.x - srcNode.x
 
-        points = [
-          { x: srcNode.x, y: srcNode.y },
-          { x: srcNode.x + dx * 0.15, y: srcNode.y + dy * 0.33 },
-          { x: srcNode.x + dx * 0.5, y: srcNode.y + dy * 0.5 },
-          { x: srcNode.x + dx * 0.85, y: srcNode.y + dy * 0.67 },
-          { x: tgtNode.x, y: tgtNode.y },
-        ]
+        points = horizontal
+          ? [
+              { x: srcNode.x, y: srcNode.y },
+              { x: srcNode.x + dx * 0.33, y: srcNode.y + dy * 0.15 },
+              { x: srcNode.x + dx * 0.5, y: srcNode.y + dy * 0.5 },
+              { x: srcNode.x + dx * 0.67, y: srcNode.y + dy * 0.85 },
+              { x: tgtNode.x, y: tgtNode.y },
+            ]
+          : [
+              { x: srcNode.x, y: srcNode.y },
+              { x: srcNode.x + dx * 0.15, y: srcNode.y + dy * 0.33 },
+              { x: srcNode.x + dx * 0.5, y: srcNode.y + dy * 0.5 },
+              { x: srcNode.x + dx * 0.85, y: srcNode.y + dy * 0.67 },
+              { x: tgtNode.x, y: tgtNode.y },
+            ]
       }
 
       positionedEdges.push({ ...edge, points })
