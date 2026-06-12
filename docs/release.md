@@ -28,13 +28,13 @@ That gate runs:
 
 Latest verified current-tree result:
 
-- unit tests: `142` passed
-- browser tests: `83` passed
+- unit tests: `148` passed
+- browser tests: `85` passed
 - built static demo smoke test: passed
-- core ESM: `202.86 KiB`
-- core CJS: `205.14 KiB`
-- demo entry: `478.38 KiB` raw / `137.53 KiB` gzip
-- dry-run tarball: `mermaid-render-core-1.0.0.tgz`, package size `275.8 kB`
+- core ESM: `205.49 KiB`
+- core CJS: `207.78 KiB`
+- demo entry: `479.54 KiB` raw / `138.11 KiB` gzip
+- dry-run tarball: `mermaid-render-core-1.0.1.tgz`, package size `283.6 kB`
 
 GitHub Actions PR / mainline gate:
 
