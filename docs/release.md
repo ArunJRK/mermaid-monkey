@@ -28,13 +28,13 @@ That gate runs:
 
 Latest verified current-tree result:
 
-- unit tests: `148` passed
-- browser tests: `85` passed
+- unit tests: `152` passed
+- browser tests: `84` passed; `1` pre-existing mid-relayout screenshot flake on the verifying darwin machine (fails identically on the unchanged `1.0.1` tree and passes when run in isolation)
 - built static demo smoke test: passed
-- core ESM: `205.49 KiB`
-- core CJS: `207.78 KiB`
-- demo entry: `479.54 KiB` raw / `138.11 KiB` gzip
-- dry-run tarball: `mermaid-render-core-1.0.1.tgz`, package size `283.6 kB`
+- core ESM: `206.40 KiB`
+- core CJS: `208.69 KiB`
+- demo entry: `479.84 KiB` raw / `138.18 KiB` gzip
+- dry-run tarball: `mermaid-render-core-1.0.2.tgz`, package size `284.8 kB`
 
 GitHub Actions PR / mainline gate:
 
