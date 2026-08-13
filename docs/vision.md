@@ -1,12 +1,12 @@
 # Vision
 
-## What is mermaid-render?
+## What is mermaid-monkey?
 
 A high-performance, interactive rendering engine for Mermaid diagrams. It takes Mermaid's text-as-code philosophy and pairs it with a modern WebGL-powered canvas — zoom, pan, fold nodes, navigate across files.
 
 The engine is a standalone, publishable npm library. In the current v1 release scope, the shipped consumers are:
 
-- `@mermaid-render/core` as an embeddable web library
+- `@mermaid-monkey/core` as an embeddable web library
 - the static demo web app built from `packages/core/dist-demo/`
 
 VS Code remains a future consumer, not part of the current v1 release target.
@@ -17,7 +17,7 @@ Mermaid.js is great for defining diagrams as code but produces static SVGs — n
 
 Tools like Coggle, Miro, and Excalidraw are interactive but don't use a text-based format — you lose version control, diffability, and code-as-documentation.
 
-mermaid-render bridges this: Mermaid syntax in, interactive GPU-rendered canvas out.
+Mermaid Monkey bridges this: Mermaid syntax in, interactive GPU-rendered canvas out.
 
 ## Primary Use Cases
 

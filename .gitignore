@@ -1,3 +1,7 @@
 node_modules/
 dist/
 .claude/worktrees/
+dist-demo/
+.context/
+test-results/
+playwright-report/

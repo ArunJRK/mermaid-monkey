@@ -1,4 +1,4 @@
-# mermaid-render Execution Matrix
+# mermaid-monkey Execution Matrix
 
 **Source plan:** `docs/superpowers/plans/2026-03-28-mermaid-render-impl.md`
 **Spec:** `docs/superpowers/specs/2026-03-28-mermaid-render-design.md`
@@ -41,12 +41,12 @@
 
 | Task | Description | Chunk | Done When |
 |------|-------------|-------|-----------|
-| 1.1 | Create root `package.json`, `pnpm-workspace.yaml`, base `tsconfig.json`, `.gitignore` | foundation | `cat package.json \| jq .name` → `"mermaid-render"` |
-| 1.2 | Create `packages/core/package.json` with dependencies (mermaid, dagre, pixi.js), `tsconfig.json`, `tsup.config.ts` | foundation | `cat packages/core/package.json \| jq .name` → `"@mermaid-render/core"` |
+| 1.1 | Create root `package.json`, `pnpm-workspace.yaml`, base `tsconfig.json`, `.gitignore` | foundation | `cat package.json \| jq .name` → `"mermaid-monkey"` |
+| 1.2 | Create `packages/core/package.json` with dependencies (mermaid, dagre, pixi.js), `tsconfig.json`, `tsup.config.ts` | foundation | `cat packages/core/package.json \| jq .name` → `"@mermaid-monkey/core"` |
 | 1.3 | Run `pnpm install` and verify lockfile | foundation | `test -f pnpm-lock.yaml && echo ok` → `ok` |
-| 1.4 | Create `packages/core/src/types.ts` with all interfaces (RenderGraph, RenderNode, RenderEdge, RenderSubgraph, Directive types, PositionedGraph, LoadResult, NodeEvent) | foundation | `pnpm --filter @mermaid-render/core typecheck` → exit 0 |
-| 1.5 | Create `packages/core/vitest.config.ts` (with `environment: 'jsdom'`) and type validation tests | foundation | `pnpm --filter @mermaid-render/core test` → PASS |
-| 1.6 | Create `packages/core/src/index.ts` with placeholder exports, verify build | foundation | `pnpm --filter @mermaid-render/core build && test -f packages/core/dist/index.js` → true |
+| 1.4 | Create `packages/core/src/types.ts` with all interfaces (RenderGraph, RenderNode, RenderEdge, RenderSubgraph, Directive types, PositionedGraph, LoadResult, NodeEvent) | foundation | `pnpm --filter @mermaid-monkey/core typecheck` → exit 0 |
+| 1.5 | Create `packages/core/vitest.config.ts` (with `environment: 'jsdom'`) and type validation tests | foundation | `pnpm --filter @mermaid-monkey/core test` → PASS |
+| 1.6 | Create `packages/core/src/index.ts` with placeholder exports, verify build | foundation | `pnpm --filter @mermaid-monkey/core build && test -f packages/core/dist/index.js` → true |
 
 ### Theme 1 Gate
 `pnpm install && pnpm build && pnpm test` — all pass from repo root.
@@ -57,15 +57,15 @@
 
 | Task | Description | Chunk | Done When |
 |------|-------------|-------|-----------|
-| 2.1 | Implement `directive-extractor.ts` — regex extraction of `@link`, `@layout`, `@pin`, `@rank`, `@spacing` from `%%` comments | parser-pipeline | `pnpm --filter @mermaid-render/core test -- directive-extractor` → 8/8 PASS |
+| 2.1 | Implement `directive-extractor.ts` — regex extraction of `@link`, `@layout`, `@pin`, `@rank`, `@spacing` from `%%` comments | parser-pipeline | `pnpm --filter @mermaid-monkey/core test -- directive-extractor` → 8/8 PASS |
 | 2.2 | Mermaid API spike — run `_spike.ts` to discover `Diagram.fromText()` and `db.getData()` shape for mermaid 11.4.x | parser-pipeline | Spike script runs without errors and logs db structure to console |
-| 2.3 | Implement `mermaid-adapter.ts` — thin wrapper around mermaid, returns `{ diagramType, db, direction }` | parser-pipeline | `pnpm --filter @mermaid-render/core test -- mermaid-adapter` → PASS |
-| 2.4 | Implement `adapters/flowchart.ts` — transforms mermaid flowchart db into RenderGraph (nodes, edges, subgraphs) | parser-pipeline | `pnpm --filter @mermaid-render/core test -- graph-builder` → 7/7 PASS |
-| 2.5 | Implement `graph-builder.ts` — orchestrator: extractDirectives → parseMermaid → buildFlowchartGraph → attach links | parser-pipeline | `pnpm --filter @mermaid-render/core test -- graph-builder` → includes directive attachment test PASS |
+| 2.3 | Implement `mermaid-adapter.ts` — thin wrapper around mermaid, returns `{ diagramType, db, direction }` | parser-pipeline | `pnpm --filter @mermaid-monkey/core test -- mermaid-adapter` → PASS |
+| 2.4 | Implement `adapters/flowchart.ts` — transforms mermaid flowchart db into RenderGraph (nodes, edges, subgraphs) | parser-pipeline | `pnpm --filter @mermaid-monkey/core test -- graph-builder` → 7/7 PASS |
+| 2.5 | Implement `graph-builder.ts` — orchestrator: extractDirectives → parseMermaid → buildFlowchartGraph → attach links | parser-pipeline | `pnpm --filter @mermaid-monkey/core test -- graph-builder` → includes directive attachment test PASS |
 
 ### Theme 2 Gate
 ```bash
-pnpm --filter @mermaid-render/core test -- parser
+pnpm --filter @mermaid-monkey/core test -- parser
 ```
 All parser tests pass. `buildGraph('graph TD\n A --> B')` returns `{ success: true, graph: { nodes: Map(2), edges: [1] } }`.
 
@@ -75,13 +75,13 @@ All parser tests pass. `buildGraph('graph TD\n A --> B')` returns `{ success: tr
 
 | Task | Description | Chunk | Done When |
 |------|-------------|-------|-----------|
-| 3.1 | Create `layout-engine.ts` interface and `philosophy-config.ts` with Narrative/Map/Blueprint/Breath presets | layout-engine | `pnpm --filter @mermaid-render/core typecheck` → exit 0 |
-| 3.2 | Implement `dagre-layout.ts` — wraps dagre, applies philosophy spacing, handles fold (hidden nodes + summary nodes + edge rerouting) | layout-engine | `pnpm --filter @mermaid-render/core test -- dagre-layout` → 5/5 PASS |
-| 3.3 | Verify philosophy spacing works: Breath produces larger layout than Blueprint for same graph | layout-engine | `pnpm --filter @mermaid-render/core test -- "applies philosophy"` → PASS |
+| 3.1 | Create `layout-engine.ts` interface and `philosophy-config.ts` with Narrative/Map/Blueprint/Breath presets | layout-engine | `pnpm --filter @mermaid-monkey/core typecheck` → exit 0 |
+| 3.2 | Implement `dagre-layout.ts` — wraps dagre, applies philosophy spacing, handles fold (hidden nodes + summary nodes + edge rerouting) | layout-engine | `pnpm --filter @mermaid-monkey/core test -- dagre-layout` → 5/5 PASS |
+| 3.3 | Verify philosophy spacing works: Breath produces larger layout than Blueprint for same graph | layout-engine | `pnpm --filter @mermaid-monkey/core test -- "applies philosophy"` → PASS |
 
 ### Theme 3 Gate
 ```bash
-pnpm --filter @mermaid-render/core test -- layout
+pnpm --filter @mermaid-monkey/core test -- layout
 ```
 All layout tests pass. `DagreLayout.compute(graph)` returns `PositionedGraph` with non-overlapping nodes.
 
@@ -95,17 +95,17 @@ All layout tests pass. `DagreLayout.compute(graph)` returns `PositionedGraph` wi
 
 | Task | Description | Chunk | Done When |
 |------|-------------|-------|-----------|
-| 4.1 | **TDD: Fold Manager** — Write tests for toggle, foldAll, unfoldAll, collapseDescendants. Then implement `interaction/fold-manager.ts`. | renderer-logic | `pnpm --filter @mermaid-render/core test -- fold-manager` → 6/6 PASS |
-| 4.2 | **TDD: Keyboard handler** — Write tests for key→action mapping (F, R, unknown keys). Then implement `interaction/keyboard.ts`. | renderer-logic | `pnpm --filter @mermaid-render/core test -- keyboard` → 3/3 PASS |
-| 4.3 | **TDD: Scene model** — Write tests for scene construction from PositionedGraph: correct number of nodes/edges, selection state changes, event emission (node:click, fold:change, error, warn), off() unsubscription, concurrent load cancellation. Then implement `renderer/scene-model.ts`. | renderer-logic | `pnpm --filter @mermaid-render/core test -- scene-model` → 10+ PASS |
-| 4.4 | **TDD: Load pipeline** — Write integration test: mermaid source string → buildGraph → layout → scene model produces correct node/edge count. Test error path (invalid source → error event + previous graph preserved). Then implement `renderer/load-pipeline.ts`. | renderer-logic | `pnpm --filter @mermaid-render/core test -- load-pipeline` → 4/4 PASS |
-| 4.5 | Implement PixiJS visual layer: `viewport.ts`, `node-sprite.ts`, `edge-graphic.ts`, `subgraph-container.ts` — thin wrappers that read from scene model. | renderer-pixi | `pnpm --filter @mermaid-render/core build` → exit 0 |
-| 4.6 | Implement `mermaid-renderer.ts` — composes scene model + PixiJS layer. Public API delegates to tested logic. | renderer-pixi | `pnpm --filter @mermaid-render/core build` → exit 0 |
+| 4.1 | **TDD: Fold Manager** — Write tests for toggle, foldAll, unfoldAll, collapseDescendants. Then implement `interaction/fold-manager.ts`. | renderer-logic | `pnpm --filter @mermaid-monkey/core test -- fold-manager` → 6/6 PASS |
+| 4.2 | **TDD: Keyboard handler** — Write tests for key→action mapping (F, R, unknown keys). Then implement `interaction/keyboard.ts`. | renderer-logic | `pnpm --filter @mermaid-monkey/core test -- keyboard` → 3/3 PASS |
+| 4.3 | **TDD: Scene model** — Write tests for scene construction from PositionedGraph: correct number of nodes/edges, selection state changes, event emission (node:click, fold:change, error, warn), off() unsubscription, concurrent load cancellation. Then implement `renderer/scene-model.ts`. | renderer-logic | `pnpm --filter @mermaid-monkey/core test -- scene-model` → 10+ PASS |
+| 4.4 | **TDD: Load pipeline** — Write integration test: mermaid source string → buildGraph → layout → scene model produces correct node/edge count. Test error path (invalid source → error event + previous graph preserved). Then implement `renderer/load-pipeline.ts`. | renderer-logic | `pnpm --filter @mermaid-monkey/core test -- load-pipeline` → 4/4 PASS |
+| 4.5 | Implement PixiJS visual layer: `viewport.ts`, `node-sprite.ts`, `edge-graphic.ts`, `subgraph-container.ts` — thin wrappers that read from scene model. | renderer-pixi | `pnpm --filter @mermaid-monkey/core build` → exit 0 |
+| 4.6 | Implement `mermaid-renderer.ts` — composes scene model + PixiJS layer. Public API delegates to tested logic. | renderer-pixi | `pnpm --filter @mermaid-monkey/core build` → exit 0 |
 | 4.7 | Create dev harness (`packages/core/dev/index.html` + `dev/main.ts` + `vite.config.ts`) | renderer-harness | `cd packages/core && pnpm dev` → Vite serves at localhost:3000, diagram visible |
 | 4.8 | Wire fold-manager + keyboard into mermaid-renderer. Double-click subgraph header toggles fold. | renderer-pixi | Open dev harness → double-click subgraph → children collapse |
 
 ### Theme 4 Gate
-`pnpm --filter @mermaid-render/core test` → ALL PASS (unit tests for fold-manager, keyboard, scene-model, load-pipeline). Dev harness at localhost:3000 renders interactive diagram.
+`pnpm --filter @mermaid-monkey/core test` → ALL PASS (unit tests for fold-manager, keyboard, scene-model, load-pipeline). Dev harness at localhost:3000 renders interactive diagram.
 
 ---
 
@@ -114,11 +114,11 @@ All layout tests pass. `DagreLayout.compute(graph)` returns `PositionedGraph` wi
 | Task | Description | Chunk | Done When |
 |------|-------------|-------|-----------|
 | 5.1 | Create `packages/vscode/package.json` with contributes (commands, keybindings, languages, views), `tsconfig.json`, `.vscodeignore` | vscode-scaffold | `cat packages/vscode/package.json \| jq .contributes.commands[0].command` → `"mermaidRender.openPreview"` |
-| 5.2 | Implement `extension.ts` — activate, register commands (openPreview, foldAll, unfoldAll), register TreeDataProvider, watch `.mmd` saves | vscode-scaffold | `pnpm --filter mermaid-render-vscode build` → exit 0 |
-| 5.3 | Implement `file-explorer.ts` — TreeDataProvider that lists `.mmd` files in workspace | vscode-scaffold | `pnpm --filter mermaid-render-vscode typecheck` → exit 0 |
-| 5.4 | Implement `renderer-panel.ts` — WebviewPanel with retainContextWhenHidden, message passing (load, foldAll, unfoldAll, navigate), cross-file navigation handler | vscode-webview | `pnpm --filter mermaid-render-vscode build` → exit 0 |
-| 5.5 | Implement `webview/webview.ts` — imports @mermaid-render/core, mounts renderer, handles postMessage load/fold/navigate | vscode-webview | `pnpm --filter mermaid-render-vscode build` → `dist/webview.js` exists |
-| 5.6 | Add `build:webview` esbuild step (iife, browser platform), update renderer-panel.ts to load bundled webview.js via webview URI | vscode-webview | `pnpm --filter mermaid-render-vscode build && test -f packages/vscode/dist/webview.js && test -f packages/vscode/dist/extension.js` → true |
+| 5.2 | Implement `extension.ts` — activate, register commands (openPreview, foldAll, unfoldAll), register TreeDataProvider, watch `.mmd` saves | vscode-scaffold | `pnpm --filter mermaid-monkey-vscode build` → exit 0 |
+| 5.3 | Implement `file-explorer.ts` — TreeDataProvider that lists `.mmd` files in workspace | vscode-scaffold | `pnpm --filter mermaid-monkey-vscode typecheck` → exit 0 |
+| 5.4 | Implement `renderer-panel.ts` — WebviewPanel with retainContextWhenHidden, message passing (load, foldAll, unfoldAll, navigate), cross-file navigation handler | vscode-webview | `pnpm --filter mermaid-monkey-vscode build` → exit 0 |
+| 5.5 | Implement `webview/webview.ts` — imports @mermaid-monkey/core, mounts renderer, handles postMessage load/fold/navigate | vscode-webview | `pnpm --filter mermaid-monkey-vscode build` → `dist/webview.js` exists |
+| 5.6 | Add `build:webview` esbuild step (iife, browser platform), update renderer-panel.ts to load bundled webview.js via webview URI | vscode-webview | `pnpm --filter mermaid-monkey-vscode build && test -f packages/vscode/dist/webview.js && test -f packages/vscode/dist/extension.js` → true |
 
 ### Theme 5 Gate
 Press F5 in VS Code → Extension Development Host opens. Create a `.mmd` file → run "Mermaid: Open Preview" → webview panel opens showing rendered diagram. File explorer shows `.mmd` files in sidebar.
@@ -167,7 +167,7 @@ Press F5 in VS Code → Extension Development Host opens. Create a `.mmd` file �
   - **Critical:** Task 2.2 is a spike. Run the spike script FIRST to discover mermaid's actual internal API before writing adapter code. Do not skip this.
 **Shared files:** `packages/core/src/parser/*`, `packages/core/src/types.ts`
 **Rollback:** Delete `packages/core/src/parser/` directory
-**Done when:** `pnpm --filter @mermaid-render/core test` → all parser tests PASS including flowchart with subgraphs and directive attachment
+**Done when:** `pnpm --filter @mermaid-monkey/core test` → all parser tests PASS including flowchart with subgraphs and directive attachment
 
 ---
 
@@ -184,7 +184,7 @@ Press F5 in VS Code → Extension Development Host opens. Create a `.mmd` file �
   - Read `packages/core/src/types.ts` for PositionedGraph interfaces
 **Shared files:** `packages/core/src/layout/*`
 **Rollback:** Delete `packages/core/src/layout/` directory
-**Done when:** `pnpm --filter @mermaid-render/core test -- layout` → 5/5 PASS. Breath layout dimensions > Blueprint for same input graph.
+**Done when:** `pnpm --filter @mermaid-monkey/core test -- layout` → 5/5 PASS. Breath layout dimensions > Blueprint for same input graph.
 
 ---
 
@@ -201,7 +201,7 @@ Press F5 in VS Code → Extension Development Host opens. Create a `.mmd` file �
   - Read `packages/core/src/parser/graph-builder.ts` for `buildGraph()` API
 **Shared files:** `packages/core/src/interaction/*`, `packages/core/src/renderer/scene-model.ts`, `packages/core/src/renderer/load-pipeline.ts`
 **Rollback:** Delete `packages/core/src/interaction/` and `packages/core/src/renderer/scene-model.ts`, `packages/core/src/renderer/load-pipeline.ts`
-**Done when:** `pnpm --filter @mermaid-render/core test -- "(fold-manager|keyboard|scene-model|load-pipeline)"` → 20+ tests PASS
+**Done when:** `pnpm --filter @mermaid-monkey/core test -- "(fold-manager|keyboard|scene-model|load-pipeline)"` → 20+ tests PASS
 
 Key tests to write (from BDD features):
 - Fold manager: toggle, foldAll, unfoldAll, collapseDescendants, non-existent subgraph
@@ -223,7 +223,7 @@ Key tests to write (from BDD features):
   - Read `packages/core/src/interaction/fold-manager.ts` and `keyboard.ts` — wire these in
 **Shared files:** `packages/core/src/renderer/viewport.ts`, `packages/core/src/renderer/node-sprite.ts`, `packages/core/src/renderer/edge-graphic.ts`, `packages/core/src/renderer/subgraph-container.ts`, `packages/core/src/renderer/mermaid-renderer.ts`, `packages/core/dev/*`
 **Rollback:** Delete `packages/core/src/renderer/viewport.ts`, `node-sprite.ts`, `edge-graphic.ts`, `subgraph-container.ts`, `mermaid-renderer.ts`, `packages/core/dev/`
-**Done when:** `pnpm --filter @mermaid-render/core build` → exit 0. Dev harness at localhost:3000 renders interactive diagram with fold/unfold and keyboard shortcuts.
+**Done when:** `pnpm --filter @mermaid-monkey/core build` → exit 0. Dev harness at localhost:3000 renders interactive diagram with fold/unfold and keyboard shortcuts.
 
 ---
 
@@ -249,7 +249,7 @@ Key tests to write (from BDD features):
   - Read VS Code Extension API docs for WebviewPanel, TreeDataProvider, commands
 **Shared files:** `packages/vscode/*`
 **Rollback:** Delete `packages/vscode/` directory
-**Done when:** `pnpm --filter mermaid-render-vscode build` → `dist/extension.js` exists
+**Done when:** `pnpm --filter mermaid-monkey-vscode build` → `dist/extension.js` exists
 
 ---
 
@@ -262,7 +262,7 @@ Key tests to write (from BDD features):
   - Read `docs/superpowers/specs/2026-03-28-mermaid-render-design.md` §4.2 Renderer Panel, §4.3 Directive Resolution, §14 Cross-File Path Resolution, §15.1 Circular Cross-File Links
   - Read `packages/core/src/index.ts` for the public API surface
   - Read `packages/vscode/src/extension.ts` for message types expected
-  - **Key complexity:** Bundling @mermaid-render/core + PixiJS + mermaid for the webview context (browser, iife). May need esbuild `define` or `alias` for mermaid's Node.js polyfills.
+  - **Key complexity:** Bundling @mermaid-monkey/core + PixiJS + mermaid for the webview context (browser, iife). May need esbuild `define` or `alias` for mermaid's Node.js polyfills.
 **Shared files:** `packages/vscode/src/renderer-panel.ts`, `packages/vscode/src/webview/webview.ts`, `packages/vscode/package.json`
 **Rollback:** Revert renderer-panel.ts to placeholder HTML. Delete webview.ts.
 **Done when:** F5 in VS Code → open `.mmd` file → "Mermaid: Open Preview" → diagram renders in webview panel. Saving file triggers hot-reload.

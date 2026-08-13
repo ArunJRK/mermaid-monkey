@@ -23,6 +23,8 @@ type DevSnapshot = {
   edgeCount: number
   subgraphCount: number
   selectedNodeId: string | null
+  selectedNodeIds: string[]
+  selectedEdgeIds: string[]
   focusStack: string[]
   renderedBounds: { minX: number; minY: number; maxX: number; maxY: number } | null
   viewportScale: number | null
@@ -62,6 +64,8 @@ type RenderedNodeMetrics = {
   layerIndex: number
   labelFill: number
   labelFontFamily: string
+  labelText: string
+  labelSegmentFontFamilies: string[]
   nodeFill: number
   nodeStroke: number
   brokenBadgeAccent: number | null
@@ -80,11 +84,15 @@ type RenderedEdgeMetrics = {
   source: string
   target: string
   alpha: number
+  hovered: boolean
+  selected: boolean
   layerIndex: number
   points: Array<{ x: number; y: number }>
   screenPoints: Array<{ x: number; y: number }>
   routedSegments: Array<{ x1: number; y1: number; x2: number; y2: number; isHorizontal: boolean }>
   bounds: Rect
+  hitBounds: Rect | null
+  hitPadding: number
   labelBounds: Rect | null
   strokeColor: number
   labelFill: number | null
@@ -106,9 +114,14 @@ type RenderedSubgraphMetrics = {
   fillColor: number
   labelFill: number
   labelFontFamily: string
+  labelText: string
+  labelBounds: Rect
   accent: number
   chevronVisible: boolean
   badgeVisible: boolean
+  badgeText: string | null
+  badgeBounds: Rect | null
+  badgeTextBounds: Rect | null
 }
 
 type LifecycleProbe = {
@@ -209,7 +222,8 @@ declare global {
       loadSource(source: string, sourcePath?: string): Promise<boolean>
       navigateTo(filePath: string, targetNode?: string): Promise<boolean>
       clickLink(nodeId: string): boolean
-      selectNode(nodeId: string | null): void
+      selectNode(nodeId: string | null, options?: { additive?: boolean }): void
+      selectEdge(edgeId: string | null, options?: { additive?: boolean }): void
       forceHoverNode(nodeId: string | null): void
       setLayout(layout: string): void
       setThemeMode(mode: 'system' | 'dark' | 'light'): void
@@ -577,6 +591,8 @@ function getSnapshot(): DevSnapshot {
     edgeCount: state._edgeGraphics.length,
     subgraphCount: state._subgraphContainers.size,
     selectedNodeId: state._selectedNodeId,
+    selectedNodeIds: Array.from((state._selectedNodeIds as Set<string> | undefined) ?? []),
+    selectedEdgeIds: Array.from((state._selectedEdgeIds as Set<string> | undefined) ?? []),
     focusStack: [...state._focusStack],
     renderedBounds: state._renderedBounds
       ? { ...state._renderedBounds }
@@ -653,6 +669,8 @@ function getRenderedNodeMetrics(): RenderedNodeMetrics[] {
     getDebugStyle(): {
       labelFill: number
       labelFontFamily: string
+      labelText: string
+      labelSegmentFontFamilies: string[]
       nodeFill: number
       nodeStroke: number
       brokenBadgeAccent: number | null
@@ -928,16 +946,22 @@ function getRenderedEdgeMetrics(): RenderedEdgeMetrics[] {
     data?: { id: string; source: string; target: string; points: Array<{ x: number; y: number }> }
     orthogonalSegments?: Array<{ x1: number; y1: number; x2: number; y2: number; isHorizontal: boolean }>
     getBounds(): Rect
+    getHitBounds?: () => Rect | null
+    getHitPadding?: () => number
+    isHovered?: () => boolean
     getLabelBounds?: () => Rect | null
     getDebugStyle?: () => {
       strokeColor: number
       labelFill: number | null
       labelVisible: boolean
       labelFontFamily: string | null
+      selected: boolean
       arrowTip: { x: number; y: number } | null
       arrowWingA: { x: number; y: number } | null
       arrowWingB: { x: number; y: number } | null
       arrowAngle: number | null
+      erSourceCardinality: string | null
+      erTargetCardinality: string | null
     }
   }> | undefined
   const viewport = state._viewport as { x: number; y: number; scale: { x: number; y: number } } | null
@@ -952,11 +976,14 @@ function getRenderedEdgeMetrics(): RenderedEdgeMetrics[] {
     .map((edge, index) => {
       const graphic = edges[index]
       const bounds = graphic.getBounds()
+      const hitBounds = graphic.getHitBounds?.() ?? null
       return {
         id: edge.id,
         source: edge.source,
         target: edge.target,
         alpha: (graphic as any).alpha ?? 1,
+        hovered: graphic.isHovered?.() ?? false,
+        selected: graphic.getDebugStyle?.().selected ?? false,
         layerIndex: (graphic as any).parent?.getChildIndex(graphic as any) ?? -1,
         points: edge.points.map((point) => ({ x: point.x, y: point.y })),
         screenPoints: edge.points.map((point) => ({
@@ -971,6 +998,15 @@ function getRenderedEdgeMetrics(): RenderedEdgeMetrics[] {
           isHorizontal: segment.isHorizontal,
         })),
         bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+        hitBounds: hitBounds
+          ? {
+              x: hitBounds.x * scaleX + offsetX,
+              y: hitBounds.y * scaleY + offsetY,
+              width: hitBounds.width * Math.abs(scaleX),
+              height: hitBounds.height * Math.abs(scaleY),
+            }
+          : null,
+        hitPadding: graphic.getHitPadding?.() ?? 0,
         labelBounds: graphic.getLabelBounds?.() ?? null,
         strokeColor: graphic.getDebugStyle?.().strokeColor ?? 0,
         labelFill: graphic.getDebugStyle?.().labelFill ?? null,
@@ -980,6 +1016,8 @@ function getRenderedEdgeMetrics(): RenderedEdgeMetrics[] {
         arrowWingA: graphic.getDebugStyle?.().arrowWingA ?? null,
         arrowWingB: graphic.getDebugStyle?.().arrowWingB ?? null,
         arrowAngle: graphic.getDebugStyle?.().arrowAngle ?? null,
+        erSourceCardinality: graphic.getDebugStyle?.().erSourceCardinality ?? null,
+        erTargetCardinality: graphic.getDebugStyle?.().erTargetCardinality ?? null,
       }
     })
 }
@@ -1171,9 +1209,14 @@ function getRenderedSubgraphMetrics(): RenderedSubgraphMetrics[] {
       fillColor: number
       labelFill: number
       labelFontFamily: string
+      labelText: string
+      labelBounds: Rect
       accent: number
       chevronVisible: boolean
       badgeVisible: boolean
+      badgeText: string | null
+      badgeBounds: Rect | null
+      badgeTextBounds: Rect | null
     }
   }> | undefined
   if (!subgraphs) return []
@@ -1453,8 +1496,11 @@ async function main() {
     clickLink(nodeId: string) {
       return renderer.activateLink(nodeId)
     },
-    selectNode(nodeId: string | null) {
-      ;(renderer as any).selectNode(nodeId)
+    selectNode(nodeId: string | null, options?: { additive?: boolean }) {
+      ;(renderer as any).selectNode(nodeId, options)
+    },
+    selectEdge(edgeId: string | null, options?: { additive?: boolean }) {
+      ;(renderer as any).selectEdge(edgeId, options)
     },
     forceHoverNode(nodeId: string | null) {
       const rendererAny = renderer as any

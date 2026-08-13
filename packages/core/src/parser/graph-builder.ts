@@ -8,7 +8,16 @@ import type {
 } from '../types'
 import { extractDirectives } from './directive-extractor'
 import { parseMermaid } from './mermaid-adapter'
+import { buildClassGraph } from './adapters/class'
+import { buildC4Graph } from './adapters/c4'
+import { buildErGraph } from './adapters/er'
 import { buildFlowchartGraph } from './adapters/flowchart'
+import { buildGanttGraph } from './adapters/gantt'
+import { buildJourneyGraph } from './adapters/journey'
+import { buildMindmapGraph } from './adapters/mindmap'
+import { buildRequirementGraph } from './adapters/requirement'
+import { buildSequenceGraph } from './adapters/sequence'
+import { buildStateGraph } from './adapters/state'
 
 function inferDeclaredDiagramType(source: string): string {
   const match = source.match(/^\s*([A-Za-z][A-Za-z0-9_-]*)/m)
@@ -134,9 +143,51 @@ export async function buildGraph(
     }
   }
 
-  // Step 3: Build graph via adapter (currently only flowchart)
+  // Step 3: Build graph via family adapter
   const { diagramType, db, direction } = parseResult
-  if (diagramType !== 'flowchart') {
+  let graph: RenderGraph
+
+  if (diagramType === 'flowchart') {
+    graph = buildFlowchartGraph({
+      db,
+      direction,
+      diagramType,
+      directives,
+    })
+  } else if (diagramType === 'erDiagram') {
+    graph = buildErGraph({
+      db,
+      direction,
+      diagramType,
+      directives,
+    })
+  } else if (diagramType === 'classDiagram') {
+    graph = buildClassGraph({
+      db,
+      direction,
+      diagramType,
+      directives,
+    })
+  } else if (diagramType === 'stateDiagram') {
+    graph = buildStateGraph({
+      db,
+      direction,
+      diagramType,
+      directives,
+    })
+  } else if (diagramType === 'sequenceDiagram') {
+    graph = buildSequenceGraph({ db, diagramType, directives })
+  } else if (diagramType === 'c4') {
+    graph = buildC4Graph({ db, diagramType, directives })
+  } else if (diagramType === 'requirementDiagram') {
+    graph = buildRequirementGraph({ db, diagramType, directives })
+  } else if (diagramType === 'mindmap') {
+    graph = buildMindmapGraph({ db, diagramType, directives })
+  } else if (diagramType === 'gantt') {
+    graph = buildGanttGraph({ db, diagramType, directives })
+  } else if (diagramType === 'journey') {
+    graph = buildJourneyGraph({ db, diagramType, directives })
+  } else {
     const declaredDiagramType =
       diagramType === 'unknown' ? inferDeclaredDiagramType(cleanedSource) : diagramType
     return {
@@ -144,19 +195,12 @@ export async function buildGraph(
       errors: [
         {
           code: 'UNSUPPORTED_DIAGRAM_TYPE',
-          message: `Unsupported Mermaid diagram type "${declaredDiagramType}". v1 currently supports flowchart only.`,
+          message: `Unsupported Mermaid diagram type "${declaredDiagramType}". Mermaid Monkey supports flowchart, erDiagram, classDiagram, stateDiagram, sequenceDiagram, C4, requirementDiagram, mindmap, Gantt, and journey.`,
         },
       ],
       warnings: [...extractionWarnings],
     }
   }
-
-  const graph = buildFlowchartGraph({
-    db,
-    direction,
-    diagramType,
-    directives,
-  })
 
   // Step 4: Validate link directives against graph nodes
   const warnings: RenderWarning[] = [...extractionWarnings]
@@ -169,6 +213,21 @@ export async function buildGraph(
           message: `@link references unknown node "${linkDir.nodeId}"`,
         })
       }
+    }
+    if (d.type === 'entity' && !graph.nodes.has(d.nodeId)) {
+      warnings.push({
+        code: 'ENTITY_NODE_NOT_FOUND',
+        message: `@entity references unknown node "${d.nodeId}"`,
+      })
+    }
+    if (
+      d.type === 'edge' &&
+      !graph.edges.some((edge) => edge.source === d.source && edge.target === d.target)
+    ) {
+      warnings.push({
+        code: 'EDGE_TARGET_NOT_FOUND',
+        message: `@edge references unknown edge "${d.source} -> ${d.target}"`,
+      })
     }
   }
 

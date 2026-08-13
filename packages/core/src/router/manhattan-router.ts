@@ -5,10 +5,16 @@ import type { OccupancyGrid } from './occupancy-grid'
 interface AStarNode {
   gx: number
   gy: number
-  g: number         // cost so far (steps + bends * penalty)
-  f: number         // g + h
+  steps: number     // primary cost: path length in grid steps
+  penalty: number   // secondary cost: bends + clearance
+  f: number         // steps + h
   parent: AStarNode | null
   dir: number       // 0=none, 1=up, 2=down, 3=left, 4=right
+}
+
+interface BestCellCost {
+  steps: number
+  penalty: number
 }
 
 const DIRS = [
@@ -35,15 +41,20 @@ export function manhattanRoute(
   const key = (gx: number, gy: number) => `${gx},${gy}`
 
   const open: AStarNode[] = [{
-    gx: src.gx, gy: src.gy, g: 0, f: manhattan(src, tgt), parent: null, dir: 0,
+    gx: src.gx, gy: src.gy, steps: 0, penalty: 0, f: manhattan(src, tgt), parent: null, dir: 0,
   }]
-  const closed = new Map<string, number>() // key -> best g
+  const closed = new Map<string, BestCellCost>() // key -> best lexicographic cost
 
   while (open.length > 0) {
-    // Find node with lowest f
+    // Find node with lowest primary f; use readability costs only as tie-breakers.
     let bestIdx = 0
     for (let i = 1; i < open.length; i++) {
-      if (open[i].f < open[bestIdx].f) bestIdx = i
+      if (
+        open[i].f < open[bestIdx].f ||
+        (open[i].f === open[bestIdx].f && open[i].penalty < open[bestIdx].penalty)
+      ) {
+        bestIdx = i
+      }
     }
     const current = open[bestIdx]
     open.splice(bestIdx, 1)
@@ -62,8 +73,12 @@ export function manhattanRoute(
 
     const ck = key(current.gx, current.gy)
     const prevBest = closed.get(ck)
-    if (prevBest !== undefined && prevBest <= current.g) continue
-    closed.set(ck, current.g)
+    if (
+      prevBest !== undefined &&
+      (prevBest.steps < current.steps ||
+        (prevBest.steps === current.steps && prevBest.penalty <= current.penalty))
+    ) continue
+    closed.set(ck, { steps: current.steps, penalty: current.penalty })
 
     // Expand neighbors
     for (const { dx, dy, dir } of DIRS) {
@@ -75,16 +90,21 @@ export function manhattanRoute(
       if (!isTarget && !grid.isFreeCell(nx, ny)) continue
 
       const isBend = current.dir !== 0 && current.dir !== dir
-      const stepCost = 1 + (isBend ? bendPenalty : 0)
-      const ng = current.g + stepCost
+      const clearancePenalty = isTarget ? 0 : grid.cellPenalty(nx, ny)
+      const nsteps = current.steps + 1
+      const npenalty = current.penalty + (isBend ? bendPenalty : 0) + clearancePenalty
 
       const nk = key(nx, ny)
       const existing = closed.get(nk)
-      if (existing !== undefined && existing <= ng) continue
+      if (
+        existing !== undefined &&
+        (existing.steps < nsteps ||
+          (existing.steps === nsteps && existing.penalty <= npenalty))
+      ) continue
 
       open.push({
-        gx: nx, gy: ny, g: ng,
-        f: ng + manhattan({ gx: nx, gy: ny }, tgt),
+        gx: nx, gy: ny, steps: nsteps, penalty: npenalty,
+        f: nsteps + manhattan({ gx: nx, gy: ny }, tgt),
         parent: current, dir,
       })
     }

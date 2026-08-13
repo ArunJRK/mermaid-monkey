@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest'
 import { extractDirectives } from '../directive-extractor'
 import type {
   LinkDirective,
+  EntityDirective,
+  EdgeDirective,
+  FileDirective,
+  LensDirective,
   LayoutDirective,
   PinDirective,
   RankDirective,
@@ -109,5 +113,80 @@ graph TD
     expect(result.directives).toHaveLength(0)
     expect(result.warnings).toHaveLength(1)
     expect(result.warnings[0].code).toBe('LINK_DIRECTIVE_INVALID')
+  })
+
+  it('extracts semantic directives and key-value metadata', () => {
+    const source = `%% @file domain=topology title="Product topology"
+%% @entity view_builder spec:view-builder domain=transform tags=transform,risk
+%% @edge view_builder -> audit_logs ref=R9 status=unpinned severity=critical kind=tenant-isolation reviewed
+%% @lens risk include=status:unpinned,severity:critical
+flowchart LR
+    view_builder[view-builder] -.-> audit_logs[audit-logs]`
+
+    const result = extractDirectives(source)
+
+    expect(result.directives).toHaveLength(4)
+    const file = result.directives[0] as FileDirective
+    expect(file).toMatchObject({
+      type: 'file',
+      metadata: {
+        domain: 'topology',
+        title: 'Product topology',
+      },
+    })
+
+    const entity = result.directives[1] as EntityDirective
+    expect(entity).toMatchObject({
+      type: 'entity',
+      nodeId: 'view_builder',
+      entityType: 'spec',
+      entityId: 'view-builder',
+      metadata: {
+        domain: 'transform',
+        tags: ['transform', 'risk'],
+      },
+    })
+
+    const edge = result.directives[2] as EdgeDirective
+    expect(edge).toMatchObject({
+      type: 'edge',
+      source: 'view_builder',
+      target: 'audit_logs',
+      metadata: {
+        ref: 'R9',
+        status: 'unpinned',
+        severity: 'critical',
+        kind: 'tenant-isolation',
+        reviewed: true,
+      },
+    })
+
+    const lens = result.directives[3] as LensDirective
+    expect(lens).toMatchObject({
+      type: 'lens',
+      name: 'risk',
+      metadata: {
+        include: ['status:unpinned', 'severity:critical'],
+      },
+    })
+    expect(result.cleanedSource).not.toContain('@entity')
+    expect(result.cleanedSource).toContain('flowchart LR')
+  })
+
+  it('surfaces malformed semantic directives as warnings', () => {
+    const source = `%% @entity missingKindRef
+%% @edge A -x B
+%% @lens
+graph TD
+    A --> B`
+
+    const result = extractDirectives(source)
+
+    expect(result.directives).toHaveLength(0)
+    expect(result.warnings.map((warning) => warning.code)).toEqual([
+      'ENTITY_DIRECTIVE_INVALID',
+      'EDGE_DIRECTIVE_INVALID',
+      'LENS_DIRECTIVE_INVALID',
+    ])
   })
 })

@@ -8,22 +8,22 @@
       name="description"
       content="Mermaid Monkey turns Mermaid syntax into an interactive GPU-rendered canvas with zoom, pan, folding, and cross-file navigation."
     />
-    <link rel="canonical" href="https://arunjrk.github.io/mermaid-render/" />
+    <link rel="canonical" href="https://arunjrk.github.io/mermaid-monkey/" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Mermaid Monkey" />
     <meta
       property="og:description"
       content="Mermaid syntax in, interactive GPU-rendered canvas out."
     />
-    <meta property="og:url" content="https://arunjrk.github.io/mermaid-render/" />
-    <meta property="og:image" content="https://arunjrk.github.io/mermaid-render/brand/social-card.png" />
+    <meta property="og:url" content="https://arunjrk.github.io/mermaid-monkey/" />
+    <meta property="og:image" content="https://arunjrk.github.io/mermaid-monkey/brand/social-card.png" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Mermaid Monkey" />
     <meta
       name="twitter:description"
       content="Mermaid syntax in, interactive GPU-rendered canvas out."
     />
-    <meta name="twitter:image" content="https://arunjrk.github.io/mermaid-render/brand/social-card.png" />
+    <meta name="twitter:image" content="https://arunjrk.github.io/mermaid-monkey/brand/social-card.png" />
     <meta name="theme-color" content="#08090c" />
     <link rel="icon" href="./brand/favicon.ico" sizes="any" />
     <link rel="icon" href="./brand/favicon.svg" type="image/svg+xml" />
@@ -40,14 +40,14 @@
       <nav class="nav-links" aria-label="Project links">
         <a href="#features">Features</a>
         <a href="#quickstart">Quickstart</a>
-        <a href="https://github.com/ArunJRK/mermaid-render">GitHub</a>
+        <a href="https://github.com/ArunJRK/mermaid-monkey">GitHub</a>
       </nav>
     </header>
 
     <main id="top">
       <section class="hero-shell" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow">Mermaid Monkey for @mermaid-render/core</p>
+          <p class="eyebrow">Mermaid Monkey for @mermaid-monkey/core</p>
           <h1 id="hero-title">Mermaid Monkey</h1>
           <p class="hero-lede">
             Mermaid syntax in, interactive GPU-rendered canvas out.
@@ -61,18 +61,18 @@
               <span class="button-icon" aria-hidden="true">↧</span>
               Get Started
             </a>
-            <a class="button secondary" href="https://github.com/ArunJRK/mermaid-render">
+            <a class="button secondary" href="https://github.com/ArunJRK/mermaid-monkey">
               <span class="button-icon" aria-hidden="true">⌘</span>
               GitHub
             </a>
-            <a class="button secondary" href="https://www.npmjs.com/package/@mermaid-render/core">
+            <a class="button secondary" href="https://www.npmjs.com/package/@mermaid-monkey/core">
               <span class="button-icon" aria-hidden="true">▣</span>
               npm
             </a>
           </div>
 
           <div class="install-strip" aria-label="Install command">
-            <code id="install-command">pnpm add @mermaid-render/core</code>
+            <code id="install-command">pnpm add @mermaid-monkey/core</code>
             <button class="icon-button" type="button" data-copy-target="install-command" aria-label="Copy install command">
               <span aria-hidden="true">□</span>
             </button>
@@ -108,7 +108,7 @@
           <p class="eyebrow">Live engine demo</p>
           <h2 id="demo-title">A real canvas, not a screenshot</h2>
           <p>
-            The demo below lazy-loads @mermaid-render/core, mounts PixiJS into the canvas, and uses the same virtual file resolver contract as the embeddable API.
+            The demo below lazy-loads @mermaid-monkey/core, mounts PixiJS into the canvas, and uses the same virtual file resolver contract as the embeddable API.
           </p>
         </div>
 
@@ -219,7 +219,7 @@ graph TD
           <pre><code id="embed-snippet">import {
   MermaidRenderer,
   createVirtualFileResolver,
-} from '@mermaid-render/core'
+} from '@mermaid-monkey/core'
 
 const canvas = document.querySelector('canvas')
 if (!canvas) throw new Error('Missing canvas')
@@ -245,11 +245,11 @@ await renderer.load(files['/docs/root.mmd'], {
     </main>
 
     <footer class="site-footer">
-      <a href="https://github.com/ArunJRK/mermaid-render">GitHub</a>
-      <a href="https://www.npmjs.com/package/@mermaid-render/core">npm</a>
-      <a href="https://github.com/ArunJRK/mermaid-render/blob/main/docs/vision.md">Docs</a>
-      <a href="https://github.com/ArunJRK/mermaid-render/blob/main/docs/pain-points.md">Problem list</a>
-      <a href="https://github.com/ArunJRK/mermaid-render/blob/main/LICENSE">MIT</a>
+      <a href="https://github.com/ArunJRK/mermaid-monkey">GitHub</a>
+      <a href="https://www.npmjs.com/package/@mermaid-monkey/core">npm</a>
+      <a href="https://github.com/ArunJRK/mermaid-monkey/blob/main/docs/vision.md">Docs</a>
+      <a href="https://github.com/ArunJRK/mermaid-monkey/blob/main/docs/pain-points.md">Problem list</a>
+      <a href="https://github.com/ArunJRK/mermaid-monkey/blob/main/LICENSE">MIT</a>
       <span>Built by ArunJRK</span>
     </footer>
   </body>

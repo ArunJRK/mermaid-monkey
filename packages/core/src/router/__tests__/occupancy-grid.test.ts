@@ -52,6 +52,15 @@ describe('OccupancyGrid', () => {
     expect(grid.isFreeCell(0, 1)).toBe(true)
   })
 
+  it('adds a soft penalty near occupied cells without blocking clear cells', () => {
+    const grid = new OccupancyGrid(0, 0, 200, 200, 20)
+    grid.markPath([{ gx: 5, gy: 5 }])
+
+    expect(grid.cellPenalty(5, 5)).toBe(Infinity)
+    expect(grid.cellPenalty(6, 5)).toBeGreaterThan(grid.cellPenalty(8, 5))
+    expect(grid.isFreeCell(6, 5)).toBe(true)
+  })
+
   it('converts between world coords and grid cells', () => {
     const grid = new OccupancyGrid(0, 0, 200, 200, 20)
     const cell = grid.worldToCell(100, 60)

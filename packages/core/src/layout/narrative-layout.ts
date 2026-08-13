@@ -1,6 +1,7 @@
 import dagre from '@dagrejs/dagre'
-import { computeNodeWidth } from './text-measure'
+import { computeNodeLabelLayout } from './text-measure'
 import { DagreLayout } from './dagre-layout'
+import { estimateRenderedNodeFootprint } from '../node-footprint'
 import type {
   RenderGraph,
   RenderEdge,
@@ -75,9 +76,12 @@ export class NarrativeLayout implements LayoutEngine {
       }
     }
 
-    // If the graph has many subgraphs (overview diagram), Narrative flow lanes
-    // don't make sense. Fall back to the standard two-pass dagre layout.
-    if (graph.subgraphs.size > 3) {
+    // Narrative flow lanes have no notion of subgraph containment: the lane
+    // projection collapses the cross axis to three rows, interleaving members
+    // of different subgraphs and stacking same-rank nodes onto one point
+    // (GH roughdraft#6: a 3-subgraph, ~40-node flowchart rendered as a pile).
+    // Any subgraph diagram gets the standard two-pass dagre layout instead.
+    if (graph.subgraphs.size > 0) {
       const fallback = new DagreLayout({ philosophy: 'narrative', spacingMultiplier: this.multiplier })
       return fallback.compute(graph)
     }
@@ -141,6 +145,16 @@ export class NarrativeLayout implements LayoutEngine {
         width,
         height,
       })
+    }
+
+    // Lane projection is an opinionated squeeze of dagre's cross axis. On
+    // graphs denser than the three-lane model can hold (e.g. several
+    // same-rank branches forced into one lane), it stacks nodes onto each
+    // other. The no-overlap invariant (goal.md item 13) outranks the lane
+    // aesthetic, so delegate those graphs to the generic engine.
+    if (this._hasRenderedOverlap(positionedNodes)) {
+      const fallback = new DagreLayout({ philosophy: 'narrative', spacingMultiplier: this.multiplier })
+      return fallback.compute(graph)
     }
 
     // Step 5: Route edges
@@ -540,9 +554,42 @@ export class NarrativeLayout implements LayoutEngine {
     return positionedSubgraphs
   }
 
+  /**
+   * True when any two nodes' rendered footprints (layout size grown to the
+   * true rendered label box) strictly intersect.
+   */
+  private _hasRenderedOverlap(nodes: Map<string, PositionedNode>): boolean {
+    const rects: Array<{ left: number; right: number; top: number; bottom: number }> = []
+    for (const node of nodes.values()) {
+      const footprint = estimateRenderedNodeFootprint(node)
+      rects.push({
+        left: node.x - footprint.width / 2,
+        right: node.x + footprint.width / 2,
+        top: node.y - footprint.height / 2,
+        bottom: node.y + footprint.height / 2,
+      })
+    }
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i]
+        const b = rects[j]
+        if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
   private _nodeSize(node: RenderNode): { width: number; height: number } {
-    let width = computeNodeWidth(node.label, this.config.nodeMinWidth, this.config.nodePadding)
-    let height = this.config.nodeMinHeight
+    const labelLayout = computeNodeLabelLayout(
+      node.label,
+      this.config.nodeMinWidth,
+      this.config.nodeMinHeight,
+      this.config.nodePadding,
+    )
+    let width = labelLayout.width
+    let height = labelLayout.height
 
     if (node.shape === 'diamond') {
       width = Math.ceil(width * 1.35)

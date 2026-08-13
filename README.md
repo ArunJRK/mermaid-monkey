@@ -1,14 +1,14 @@
-# mermaid-render
+# mermaid-monkey
 
-`@mermaid-render/core` is a framework-agnostic Mermaid rendering engine for the web. It mounts into a `<canvas>`, renders with PixiJS on a GPU backend, and adds zoom, pan, folding, and cross-file navigation.
+`@mermaid-monkey/core` is a framework-agnostic Mermaid rendering engine for the web. It mounts into a `<canvas>`, renders with PixiJS on a GPU backend, and adds zoom, pan, folding, and cross-file navigation.
 
-Product landing page: [Mermaid Monkey](https://arunjrk.github.io/mermaid-render/)
+Product landing page: [Mermaid Monkey](https://arunjrk.github.io/mermaid-monkey/)
 
 ## Why?
 
 Mermaid is great for defining diagrams as code. But the output is a static SVG — no zoom, no folding, no way to handle complexity. Large diagrams become unreadable, and there's no way to split them across files.
 
-mermaid-render fixes this: Mermaid syntax in, interactive GPU-rendered canvas out.
+Mermaid Monkey fixes this: Mermaid syntax in, interactive GPU-rendered canvas out.
 
 For the concrete list of product problems this repo is trying to solve, see:
 
@@ -61,7 +61,7 @@ Performance and degradation are also explicit:
 import {
   MermaidRenderer,
   createVirtualFileResolver,
-} from '@mermaid-render/core'
+} from '@mermaid-monkey/core'
 
 const canvas = document.querySelector('canvas')
 if (!canvas) throw new Error('Missing canvas')
@@ -184,7 +184,7 @@ Philosophy/theme switch behavior:
 For virtual in-memory projects, use the exported helper:
 
 ```ts
-import { createVirtualFileResolver, normalizeDiagramPath } from '@mermaid-render/core'
+import { createVirtualFileResolver, normalizeDiagramPath } from '@mermaid-monkey/core'
 ```
 
 ## Demo
@@ -198,7 +198,7 @@ pnpm --dir packages/core dev --host 127.0.0.1
 Static demo build:
 
 ```bash
-pnpm --filter @mermaid-render/core build:demo
+pnpm --filter @mermaid-monkey/core build:demo
 ```
 
 Marketing site:
@@ -213,7 +213,7 @@ The marketing site output is written to `packages/site/dist/` and deployed to Gi
 Preview the built core demo artifact locally:
 
 ```bash
-pnpm --filter @mermaid-render/core preview:demo
+pnpm --filter @mermaid-monkey/core preview:demo
 ```
 
 The core demo output is written to `packages/core/dist-demo/` and can be served by any static host.

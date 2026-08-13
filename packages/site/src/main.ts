@@ -2,10 +2,10 @@ import './styles.css'
 
 type DemoLayout = 'narrative' | 'blueprint'
 
-type RendererModule = typeof import('@mermaid-render/core')
+type RendererModule = typeof import('@mermaid-monkey/core')
 type MermaidRendererInstance = InstanceType<RendererModule['MermaidRenderer']>
-type LinkResolver = import('@mermaid-render/core').LinkResolver
-type RenderGraph = import('@mermaid-render/core').RenderGraph
+type LinkResolver = import('@mermaid-monkey/core').LinkResolver
+type RenderGraph = import('@mermaid-monkey/core').RenderGraph
 
 const files: Record<string, string> = {
   '/demo/source.mmd': `%% @link docs -> ./details#hydrate
@@ -114,7 +114,7 @@ async function initDemo() {
   if (!demoCanvas) return
 
   try {
-    rendererModule = await import('@mermaid-render/core')
+    rendererModule = await import('@mermaid-monkey/core')
     const { MermaidRenderer } = rendererModule
     renderer = new MermaidRenderer({ themeMode: 'dark' })
     renderer.on('warn', (warning) => {

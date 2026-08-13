@@ -41,9 +41,15 @@ export interface MermaidParseResult {
  */
 function mapDiagramType(mermaidType: string): DiagramType {
   if (mermaidType.startsWith('flowchart')) return 'flowchart'
-  if (mermaidType.startsWith('classDiagram')) return 'classDiagram'
+  if (mermaidType === 'er' || mermaidType.startsWith('erDiagram')) return 'erDiagram'
+  if (mermaidType === 'class' || mermaidType.startsWith('classDiagram')) return 'classDiagram'
   if (mermaidType.startsWith('c4')) return 'c4'
   if (mermaidType.startsWith('stateDiagram')) return 'stateDiagram'
+  if (mermaidType === 'sequence') return 'sequenceDiagram'
+  if (mermaidType === 'requirement') return 'requirementDiagram'
+  if (mermaidType === 'mindmap') return 'mindmap'
+  if (mermaidType === 'gantt') return 'gantt'
+  if (mermaidType === 'journey') return 'journey'
   return 'unknown'
 }
 

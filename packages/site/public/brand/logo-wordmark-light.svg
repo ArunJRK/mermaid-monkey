@@ -13,5 +13,5 @@
   <circle cx="49" cy="51" r="8" fill="#147AD6"/>
   <circle cx="73" cy="72" r="8" fill="#6F5CFF"/>
   <text x="120" y="60" fill="#172033" font-family="Inter, Arial, sans-serif" font-size="38" font-weight="800">Mermaid Monkey</text>
-  <text x="122" y="81" fill="#596174" font-family="JetBrains Mono, Consolas, monospace" font-size="14">@mermaid-render/core</text>
+  <text x="122" y="81" fill="#596174" font-family="JetBrains Mono, Consolas, monospace" font-size="14">@mermaid-monkey/core</text>
 </svg>

@@ -1,19 +1,19 @@
 {
-  "name": "mermaid-render",
+  "name": "mermaid-monkey",
   "private": true,
   "scripts": {
-    "lint": "pnpm --filter @mermaid-render/core lint",
-    "typecheck": "pnpm --filter @mermaid-render/core typecheck",
-    "test": "pnpm --filter @mermaid-render/core test",
-    "test:browser": "pnpm --filter @mermaid-render/core test:browser",
-    "build": "pnpm --filter @mermaid-render/core build",
-    "build:demo": "pnpm --filter @mermaid-render/core build:demo",
-    "dev:site": "pnpm --filter @mermaid-render/site dev",
-    "typecheck:site": "pnpm --filter @mermaid-render/site typecheck",
-    "build:site": "pnpm --filter @mermaid-render/site build",
-    "preview:site": "pnpm --filter @mermaid-render/site preview",
-    "verify:site": "pnpm --filter @mermaid-render/core build && pnpm typecheck:site && pnpm build:site",
-    "verify:core": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:browser && pnpm build && pnpm build:demo && pnpm --filter @mermaid-render/core test:browser:static-demo && pnpm --filter @mermaid-render/core bundle:check && pnpm --filter @mermaid-render/core pack:check"
+    "lint": "pnpm --filter @mermaid-monkey/core lint",
+    "typecheck": "pnpm --filter @mermaid-monkey/core typecheck",
+    "test": "pnpm --filter @mermaid-monkey/core test",
+    "test:browser": "pnpm --filter @mermaid-monkey/core test:browser",
+    "build": "pnpm --filter @mermaid-monkey/core build",
+    "build:demo": "pnpm --filter @mermaid-monkey/core build:demo",
+    "dev:site": "pnpm --filter @mermaid-monkey/site dev",
+    "typecheck:site": "pnpm --filter @mermaid-monkey/site typecheck",
+    "build:site": "pnpm --filter @mermaid-monkey/site build",
+    "preview:site": "pnpm --filter @mermaid-monkey/site preview",
+    "verify:site": "pnpm --filter @mermaid-monkey/core build && pnpm typecheck:site && pnpm build:site",
+    "verify:core": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:browser && pnpm build && pnpm build:demo && pnpm --filter @mermaid-monkey/core test:browser:static-demo && pnpm --filter @mermaid-monkey/core bundle:check && pnpm --filter @mermaid-monkey/core pack:check"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild"]

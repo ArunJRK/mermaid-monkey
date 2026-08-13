@@ -37,15 +37,15 @@ const MAP: PhilosophyConfig = {
 }
 
 const BLUEPRINT: PhilosophyConfig = {
-  nodeSep: 20,
-  rankSep: 30,
-  edgeSep: 10,
+  nodeSep: 44,
+  rankSep: 64,
+  edgeSep: 18,
   rankDir: 'TB',
-  marginX: 20,
-  marginY: 20,
+  marginX: 44,
+  marginY: 40,
   nodeMinWidth: 160,
-  nodeMinHeight: 44,
-  nodePadding: 14,
+  nodeMinHeight: 48,
+  nodePadding: 18,
 }
 
 const BREATH: PhilosophyConfig = {

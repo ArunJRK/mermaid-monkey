@@ -2,8 +2,15 @@ import { Container, Graphics, BitmapText } from 'pixi.js'
 import type { PositionedSubgraph } from '../types'
 import { ensureFontsInstalled } from './fonts'
 import { getSubgraphDepthFill, type Theme } from './theme'
+import { measureTextWidth } from '../layout/text-measure'
 
 const LABEL_PADDING = 10
+const HEADER_HEIGHT = 28
+const LABEL_LEFT_OFFSET = LABEL_PADDING + 16
+const BADGE_HEIGHT = 18
+const BADGE_TOP_OFFSET = 6
+const BADGE_TEXT_CENTER_OFFSET = BADGE_TOP_OFFSET + BADGE_HEIGHT / 2
+const BADGE_GAP = 8
 
 export class SubgraphContainer extends Container {
   data: PositionedSubgraph
@@ -38,33 +45,35 @@ export class SubgraphContainer extends Container {
 
     // Label
     ensureFontsInstalled()
+    const labelFontSize = fontName === 'MermaidBlueprint' ? 13 : 12
     this._label = new BitmapText({
-      text: subgraph.label,
-      style: { fontFamily: fontName, fontSize: 12, fill: theme.subgraphLabel },
+      text: this._fitLabelText(subgraph.label, hw, labelFontSize),
+      style: { fontFamily: fontName, fontSize: labelFontSize, fill: theme.subgraphLabel },
     })
-    this._label.x = -hw + LABEL_PADDING + 16 // leave room for chevron
-    this._label.y = -hh + LABEL_PADDING
+    this._label.x = -hw + LABEL_LEFT_OFFSET // leave room for chevron
+    this._label.y = -hh + 8
     this.addChild(this._label)
 
     // Chevron indicator (fold state)
     this._chevron = new BitmapText({
       text: subgraph.collapsed ? '\u25B6' : '\u25BC', // right-pointing or down-pointing triangle
-      style: { fontFamily: fontName, fontSize: 12, fill: theme.subgraphLabel },
+      style: { fontFamily: fontName, fontSize: labelFontSize, fill: theme.subgraphLabel },
     })
     this._chevron.x = -hw + LABEL_PADDING
-    this._chevron.y = -hh + LABEL_PADDING
+    this._chevron.y = -hh + 8
     this.addChild(this._chevron)
 
     // Count badge — pill at top-right showing node count
     const nodeCount = subgraph.nodeIds.length
     if (nodeCount > 0) {
+      const badgeWidth = this._badgeWidth(nodeCount)
       this._badge = new BitmapText({
         text: String(nodeCount),
-        style: { fontFamily: fontName, fontSize: 10, fill: theme.subgraphLabel },
+        style: { fontFamily: fontName, fontSize: fontName === 'MermaidBlueprint' ? 11 : 10, fill: theme.subgraphLabel },
       })
-      this._badge.anchor.set(1, 0)
-      this._badge.x = hw - LABEL_PADDING
-      this._badge.y = -hh + LABEL_PADDING
+      this._badge.anchor.set(0.5)
+      this._badge.x = hw - LABEL_PADDING - badgeWidth / 2
+      this._badge.y = -hh + BADGE_TEXT_CENTER_OFFSET
       this.addChild(this._badge)
     }
 
@@ -107,33 +116,37 @@ export class SubgraphContainer extends Container {
     this._bg.clear()
     this._drawBg(hw, hh, false)
 
-    this._label.text = subgraph.label
     this._label.style.fontFamily = fontName
+    this._label.style.fontSize = fontName === 'MermaidBlueprint' ? 13 : 12
     this._label.style.fill = theme.subgraphLabel
-    this._label.x = -hw + LABEL_PADDING + 16
-    this._label.y = -hh + LABEL_PADDING
+    this._label.text = this._fitLabelText(subgraph.label, hw, this._label.style.fontSize as number)
+    this._label.x = -hw + LABEL_LEFT_OFFSET
+    this._label.y = -hh + 8
 
     this._chevron.text = subgraph.collapsed ? '\u25B6' : '\u25BC'
     this._chevron.style.fontFamily = fontName
+    this._chevron.style.fontSize = fontName === 'MermaidBlueprint' ? 13 : 12
     this._chevron.style.fill = theme.subgraphLabel
     this._chevron.x = -hw + LABEL_PADDING
-    this._chevron.y = -hh + LABEL_PADDING
+    this._chevron.y = -hh + 8
 
     const nodeCount = subgraph.nodeIds.length
     if (nodeCount > 0) {
+      const badgeWidth = this._badgeWidth(nodeCount)
       if (!this._badge) {
         this._badge = new BitmapText({
           text: String(nodeCount),
-          style: { fontFamily: fontName, fontSize: 10, fill: theme.subgraphLabel },
+          style: { fontFamily: fontName, fontSize: fontName === 'MermaidBlueprint' ? 11 : 10, fill: theme.subgraphLabel },
         })
-        this._badge.anchor.set(1, 0)
+        this._badge.anchor.set(0.5)
         this.addChild(this._badge)
       }
       this._badge.text = String(nodeCount)
       this._badge.style.fontFamily = fontName
+      this._badge.style.fontSize = fontName === 'MermaidBlueprint' ? 11 : 10
       this._badge.style.fill = theme.subgraphLabel
-      this._badge.x = hw - LABEL_PADDING
-      this._badge.y = -hh + LABEL_PADDING
+      this._badge.x = hw - LABEL_PADDING - badgeWidth / 2
+      this._badge.y = -hh + BADGE_TEXT_CENTER_OFFSET
     } else if (this._badge) {
       this._badge.removeFromParent()
       this._badge.destroy()
@@ -186,18 +199,50 @@ export class SubgraphContainer extends Container {
     fillColor: number
     labelFill: number
     labelFontFamily: string
+    labelText: string
+    labelBounds: { x: number; y: number; width: number; height: number }
     accent: number
     chevronVisible: boolean
     badgeVisible: boolean
+    badgeText: string | null
+    badgeBounds: { x: number; y: number; width: number; height: number } | null
+    badgeTextBounds: { x: number; y: number; width: number; height: number } | null
   } {
+    const hw = this.data.width / 2
+    const hh = this.data.height / 2
+    const badgeWidth = this._badgeWidth(this.data.nodeIds.length)
+    const labelBounds = this._label.getBounds()
+    const badgeTextBounds = this._badge?.getBounds() ?? null
+    const badgeLocalLeft = hw - LABEL_PADDING - badgeWidth
+    const badgeLocalTop = -hh + BADGE_TOP_OFFSET
+    const badgeTopLeft = this.toGlobal({ x: badgeLocalLeft, y: badgeLocalTop })
+    const badgeBottomRight = this.toGlobal({
+      x: badgeLocalLeft + badgeWidth,
+      y: badgeLocalTop + BADGE_HEIGHT,
+    })
+
     return {
       depth: this._depth,
       fillColor: getSubgraphDepthFill(this._theme, this._depth),
       labelFill: this._theme.subgraphLabel,
       labelFontFamily: this._fontName,
+      labelText: this._label.text,
+      labelBounds: { x: labelBounds.x, y: labelBounds.y, width: labelBounds.width, height: labelBounds.height },
       accent: this._theme.accent,
       chevronVisible: this._chevron.visible,
       badgeVisible: this._badge?.visible ?? false,
+      badgeText: this._badge?.text ?? null,
+      badgeBounds: this._badge
+        ? {
+            x: badgeTopLeft.x,
+            y: badgeTopLeft.y,
+            width: badgeBottomRight.x - badgeTopLeft.x,
+            height: badgeBottomRight.y - badgeTopLeft.y,
+          }
+        : null,
+      badgeTextBounds: badgeTextBounds
+        ? { x: badgeTextBounds.x, y: badgeTextBounds.y, width: badgeTextBounds.width, height: badgeTextBounds.height }
+        : null,
     }
   }
 
@@ -225,6 +270,18 @@ export class SubgraphContainer extends Container {
       .fill({ color: fillColor, alpha: effectiveFillAlpha })
       .stroke({ width: strokeWidth, color: t.subgraphStroke, alpha: effectiveStrokeAlpha })
 
+    this._bg
+      .rect(-hw + 1, -hh + 1, Math.max(0, w - 2), Math.min(HEADER_HEIGHT, h))
+      .fill({ color: t.subgraphStroke, alpha: hovered ? 0.24 : 0.15 + d * 0.03 })
+
+    if (this.data.nodeIds.length > 0) {
+      const badgeWidth = this._badgeWidth(this.data.nodeIds.length)
+      this._bg
+        .roundRect(hw - LABEL_PADDING - badgeWidth, -hh + BADGE_TOP_OFFSET, badgeWidth, BADGE_HEIGHT, 9)
+        .fill({ color: t.accent, alpha: hovered ? 0.22 : 0.16 })
+        .stroke({ width: 1, color: t.accent, alpha: hovered ? 0.8 : 0.48 })
+    }
+
     // Depth indicator — subtle left accent bar for nested subgraphs
     if (d > 0) {
       const barWidth = 3
@@ -232,5 +289,38 @@ export class SubgraphContainer extends Container {
         .roundRect(-hw, -hh, barWidth, h, cornerRadius)
         .fill({ color: t.accent, alpha: 0.4 + d * 0.1 })
     }
+  }
+
+  private _badgeWidth(nodeCount: number): number {
+    const badgeText = String(nodeCount)
+    return Math.max(24, badgeText.length * 7 + 14)
+  }
+
+  private _fitLabelText(label: string, hw: number, fontSize: number): string {
+    const nodeCount = this.data.nodeIds.length
+    const labelX = -hw + LABEL_LEFT_OFFSET
+    const rightLimit = nodeCount > 0
+      ? hw - LABEL_PADDING - this._badgeWidth(nodeCount) - BADGE_GAP
+      : hw - LABEL_PADDING
+    const maxWidth = rightLimit - labelX
+
+    if (maxWidth <= 0) return ''
+    if (measureTextWidth(label, fontSize, this._fontName === 'MermaidBlueprint') <= maxWidth) {
+      return label
+    }
+
+    const ellipsis = '...'
+    const ellipsisWidth = measureTextWidth(ellipsis, fontSize, this._fontName === 'MermaidBlueprint')
+    const textBudget = maxWidth - ellipsisWidth
+    if (textBudget <= 0) return ellipsis
+
+    let fitted = ''
+    for (const char of label) {
+      const candidate = fitted + char
+      if (measureTextWidth(candidate, fontSize, this._fontName === 'MermaidBlueprint') > textBudget) break
+      fitted = candidate
+    }
+
+    return `${fitted.trimEnd()}${ellipsis}`
   }
 }

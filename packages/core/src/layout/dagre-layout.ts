@@ -1,5 +1,7 @@
 import dagre from '@dagrejs/dagre'
-import { computeNodeWidth } from './text-measure'
+import { computeNodeLabelLayout, computeNodeWidth, measureTextWidth } from './text-measure'
+import { computeErEntityTableLayout } from '../er-table-layout'
+import { computeClassCompartmentLayout } from '../class-compartment-layout'
 import type {
   RenderGraph,
   RenderEdge,
@@ -11,6 +13,15 @@ import type {
 } from '../types'
 import type { LayoutEngine, LayoutOptions } from './layout-engine'
 import { getPhilosophyConfig, type PhilosophyConfig } from './philosophy-config'
+
+const SUBGRAPH_LABEL_FONT_SIZE = 13
+const SUBGRAPH_LABEL_LEFT_INSET = 26
+const SUBGRAPH_LABEL_RIGHT_INSET = 10
+const SUBGRAPH_BADGE_GAP = 8
+const SUBGRAPH_BADGE_MIN_WIDTH = 24
+const SUBGRAPH_BADGE_PADDING = 14
+const SUBGRAPH_BADGE_CHAR_WIDTH = 7
+const SUBGRAPH_HEADER_EXTRA = 12
 
 /**
  * Maps graph direction strings (TD, TB, LR, BT, RL) to dagre rankdir values.
@@ -45,9 +56,11 @@ function toRankDir(direction: string): 'TB' | 'LR' | 'BT' | 'RL' {
 export class DagreLayout implements LayoutEngine {
   private readonly config: PhilosophyConfig
   private readonly multiplier: number
+  private readonly philosophy: string
 
   constructor(options?: LayoutOptions) {
     const philosophy = options?.philosophy ?? 'narrative'
+    this.philosophy = philosophy
     this.config = getPhilosophyConfig(philosophy)
     this.multiplier = options?.spacingMultiplier ?? 1.0
   }
@@ -77,16 +90,33 @@ export class DagreLayout implements LayoutEngine {
       }
     }
 
-    // Gather active (non-collapsed) subgraphs
-    const activeSubgraphs = new Map<string, { id: string; label: string; nodeIds: string[] }>()
+    const parentSubgraphIds = new Set<string>()
+    for (const [sgId, sg] of graph.subgraphs) {
+      if (sg.collapsed) continue
+      if (sg.nodeIds.some((id) => graph.subgraphs.has(id))) {
+        parentSubgraphIds.add(sgId)
+      }
+    }
+
+    // Gather active (non-collapsed) leaf subgraphs. Parent wrappers are
+    // derived from positioned descendants after cluster layout.
+    const activeSubgraphs = new Map<string, { id: string; label: string; nodeIds: string[]; direction?: string }>()
     for (const [sgId, sg] of graph.subgraphs) {
       if (!sg.collapsed) {
-        const visibleNodes = sg.nodeIds.filter((id) => !hiddenNodeIds.has(id))
-        if (visibleNodes.length > 0) {
-          activeSubgraphs.set(sgId, { id: sgId, label: sg.label, nodeIds: visibleNodes })
+        const visibleNodes = sg.nodeIds.filter((id) => graph.nodes.has(id) && !hiddenNodeIds.has(id))
+        if (visibleNodes.length > 0 && !parentSubgraphIds.has(sgId)) {
+          activeSubgraphs.set(sgId, { id: sgId, label: sg.label, nodeIds: visibleNodes, direction: sg.direction })
         }
       }
     }
+
+    // Nodes whose id names a subgraph are cluster aliases: the parser creates
+    // them for edges that point at the subgraph itself (e.g. `X -.-> Cluster`).
+    // They must not participate as free nodes — adding one to the cluster
+    // graph under the same id overwrites the cluster's computed dimensions,
+    // collapsing the space dagre reserves for the cluster's members and piling
+    // neighbors on top of them (GH roughdraft#6).
+    const clusterAliasIds = this._clusterAliasIds(graph)
 
     // Identify orphan nodes (not in any active subgraph)
     const nodesInSubgraphs = new Set<string>()
@@ -95,7 +125,7 @@ export class DagreLayout implements LayoutEngine {
     }
     const orphanNodeIds: string[] = []
     for (const [id] of graph.nodes) {
-      if (!hiddenNodeIds.has(id) && !nodesInSubgraphs.has(id)) {
+      if (!hiddenNodeIds.has(id) && !nodesInSubgraphs.has(id) && !clusterAliasIds.has(id)) {
         orphanNodeIds.push(id)
       }
     }
@@ -105,6 +135,15 @@ export class DagreLayout implements LayoutEngine {
 
     // If no active subgraphs, use single-pass layout (original behavior)
     if (activeSubgraphs.size === 0) {
+      return this._singlePassLayout(graph, hiddenNodeIds, collapsedSubgraphs)
+    }
+
+    if (
+      this.philosophy === 'blueprint'
+      && ['LR', 'RL'].includes(graph.direction)
+      && graph.nodes.size >= 35
+      && activeSubgraphs.size >= 5
+    ) {
       return this._singlePassLayout(graph, hiddenNodeIds, collapsedSubgraphs)
     }
 
@@ -124,8 +163,12 @@ export class DagreLayout implements LayoutEngine {
 
     for (const [sgId, sg] of activeSubgraphs) {
       const internalEdges = this._getInternalEdges(graph.edges, sg.nodeIds, hiddenNodeIds)
+      const internalDirection = this._internalDirectionForSubgraph(
+        graph,
+        sg.direction,
+      )
       const internalResult = this._layoutInternalNodes(
-        graph, sg.nodeIds, internalEdges, graph.direction,
+        graph, sg.nodeIds, internalEdges, internalDirection,
       )
       internalLayouts.set(sgId, internalResult)
     }
@@ -147,9 +190,10 @@ export class DagreLayout implements LayoutEngine {
     const LABEL_HEIGHT = 25
     for (const [sgId] of activeSubgraphs) {
       const internal = internalLayouts.get(sgId)!
+      const sg = graph.subgraphs.get(sgId)!
       clusterG.setNode(sgId, {
         label: sgId,
-        width: internal.width + CLUSTER_PADDING * 2,
+        width: this._subgraphWidth(sg.label, sg.nodeIds.length, internal.width, CLUSTER_PADDING),
         height: internal.height + CLUSTER_PADDING * 2 + LABEL_HEIGHT,
       })
     }
@@ -184,6 +228,11 @@ export class DagreLayout implements LayoutEngine {
     }
     for (const nid of orphanNodeIds) nodeToCluster.set(nid, nid)
     for (const sgId of collapsedSgIds) nodeToCluster.set(sgId, sgId)
+    // Cluster-alias endpoints resolve to the cluster they name, so their
+    // edges still constrain cluster ranks.
+    for (const aliasId of clusterAliasIds) {
+      if (activeSubgraphs.has(aliasId)) nodeToCluster.set(aliasId, aliasId)
+    }
 
     // Build a map from hidden nodes to their collapsed subgraph
     const nodeToSummary = new Map<string, string>()
@@ -193,7 +242,7 @@ export class DagreLayout implements LayoutEngine {
       }
     }
 
-    const clusterEdgeSeen = new Set<string>()
+    const projectedClusterEdges: RenderEdge[] = []
     for (const edge of graph.edges) {
       const source = nodeToSummary.get(edge.source) ?? edge.source
       const target = nodeToSummary.get(edge.target) ?? edge.target
@@ -201,10 +250,25 @@ export class DagreLayout implements LayoutEngine {
       const tgtCluster = nodeToCluster.get(target)
       if (!srcCluster || !tgtCluster) continue
       if (srcCluster === tgtCluster) continue // internal edge
-      const key = `${srcCluster}->${tgtCluster}`
-      if (clusterEdgeSeen.has(key)) continue
-      clusterEdgeSeen.add(key)
-      clusterG.setEdge(srcCluster, tgtCluster, {})
+      projectedClusterEdges.push({
+        ...edge,
+        source: srcCluster,
+        target: tgtCluster,
+      })
+    }
+
+    const hierarchyEdgesByClusterPair = new Map<string, RenderEdge>()
+    for (const edge of projectedClusterEdges) {
+      if (!this._constrainsHierarchy(edge, projectedClusterEdges)) continue
+      const key = `${edge.source}->${edge.target}`
+      const existing = hierarchyEdgesByClusterPair.get(key)
+      if (!existing || (existing.style === 'dotted' && edge.style !== 'dotted')) {
+        hierarchyEdgesByClusterPair.set(key, edge)
+      }
+    }
+
+    for (const edge of hierarchyEdgesByClusterPair.values()) {
+      clusterG.setEdge(edge.source, edge.target, {})
     }
 
     dagre.layout(clusterG)
@@ -293,6 +357,8 @@ export class DagreLayout implements LayoutEngine {
       })
     }
 
+    this._deriveNestedSubgraphBounds(graph, positionedNodes, positionedSubgraphs, 40 * m)
+
     // ═══════ Edge routing ═══════
     // Re-route edges using the final node positions.
 
@@ -302,16 +368,22 @@ export class DagreLayout implements LayoutEngine {
     for (const edge of rerouted) {
       const srcNode = positionedNodes.get(edge.source)
       const tgtNode = positionedNodes.get(edge.target)
-      if (!srcNode || !tgtNode) continue
 
-      positionedEdges.push({
-        ...edge,
-        points: [
-          { x: srcNode.x, y: srcNode.y },
-          { x: (srcNode.x + tgtNode.x) / 2, y: (srcNode.y + tgtNode.y) / 2 },
-          { x: tgtNode.x, y: tgtNode.y },
-        ],
-      })
+      if (srcNode && tgtNode) {
+        positionedEdges.push({
+          ...edge,
+          points: [
+            { x: srcNode.x, y: srcNode.y },
+            { x: (srcNode.x + tgtNode.x) / 2, y: (srcNode.y + tgtNode.y) / 2 },
+            { x: tgtNode.x, y: tgtNode.y },
+          ],
+        })
+        continue
+      }
+
+      // Cluster-alias endpoint: anchor on the positioned subgraph's border.
+      const clusterEdge = this._routeClusterAliasEdge(edge, srcNode, tgtNode, positionedSubgraphs)
+      if (clusterEdge) positionedEdges.push(clusterEdge)
     }
 
     // Compute total dimensions
@@ -325,6 +397,84 @@ export class DagreLayout implements LayoutEngine {
       subgraphs: positionedSubgraphs,
       width: totalWidth,
       height: totalHeight,
+    }
+  }
+
+  private _deriveNestedSubgraphBounds(
+    graph: RenderGraph,
+    positionedNodes: Map<string, PositionedNode>,
+    positionedSubgraphs: Map<string, PositionedSubgraph>,
+    padding: number,
+  ): void {
+    const pending = new Set(
+      Array.from(graph.subgraphs.entries())
+        .filter(([, sg]) => !sg.collapsed && sg.nodeIds.some((id) => graph.subgraphs.has(id)))
+        .map(([sgId]) => sgId),
+    )
+    const labelHeight = 25
+
+    while (pending.size > 0) {
+      let progressed = false
+
+      for (const sgId of Array.from(pending)) {
+        const sg = graph.subgraphs.get(sgId)!
+        const unresolvedChildren = sg.nodeIds
+          .filter((id) => graph.subgraphs.has(id) && !positionedSubgraphs.has(id))
+        if (unresolvedChildren.length > 0) continue
+
+        const childSubgraphs = sg.nodeIds
+          .map((id) => positionedSubgraphs.get(id))
+          .filter((subgraph): subgraph is PositionedSubgraph => subgraph !== undefined)
+        const memberNodes = sg.nodeIds
+          .map((id) => positionedNodes.get(id))
+          .filter((node): node is PositionedNode => node !== undefined)
+
+        if (childSubgraphs.length === 0 && memberNodes.length === 0) {
+          pending.delete(sgId)
+          progressed = true
+          continue
+        }
+
+        let minX = Infinity
+        let minY = Infinity
+        let maxX = -Infinity
+        let maxY = -Infinity
+
+        for (const node of memberNodes) {
+          minX = Math.min(minX, node.x - node.width / 2)
+          minY = Math.min(minY, node.y - node.height / 2)
+          maxX = Math.max(maxX, node.x + node.width / 2)
+          maxY = Math.max(maxY, node.y + node.height / 2)
+        }
+        for (const child of childSubgraphs) {
+          minX = Math.min(minX, child.x - child.width / 2)
+          minY = Math.min(minY, child.y - child.height / 2)
+          maxX = Math.max(maxX, child.x + child.width / 2)
+          maxY = Math.max(maxY, child.y + child.height / 2)
+        }
+
+        if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+          pending.delete(sgId)
+          progressed = true
+          continue
+        }
+
+        const base = positionedSubgraphs.get(sgId)
+        positionedSubgraphs.set(sgId, {
+          ...sg,
+          x: (minX + maxX) / 2,
+          y: (minY + maxY) / 2,
+          width: Math.max(
+            base?.width ?? 0,
+            this._subgraphWidth(sg.label, sg.nodeIds.length, maxX - minX, padding),
+          ),
+          height: Math.max(base?.height ?? 0, maxY - minY + padding * 2 + labelHeight),
+        })
+        pending.delete(sgId)
+        progressed = true
+      }
+
+      if (!progressed) break
     }
   }
 
@@ -362,8 +512,26 @@ export class DagreLayout implements LayoutEngine {
       })
     }
 
+    const verticalDirection = ['TD', 'TB', 'BT'].includes(direction)
+    const incidentNodeIds = new Set<string>()
+    const edgeKeys = new Set<string>()
+
     for (const edge of edges) {
+      if (!this._constrainsHierarchy(edge, edges)) continue
       g.setEdge(edge.source, edge.target, {})
+      incidentNodeIds.add(edge.source)
+      incidentNodeIds.add(edge.target)
+      edgeKeys.add(`${edge.source}->${edge.target}`)
+    }
+
+    if (verticalDirection) {
+      for (let index = 0; index < nodeIds.length - 1; index++) {
+        const source = nodeIds[index]
+        const target = nodeIds[index + 1]
+        if (edgeKeys.has(`${source}->${target}`) || edgeKeys.has(`${target}->${source}`)) continue
+        if (edges.length > 0 && incidentNodeIds.has(source) && incidentNodeIds.has(target)) continue
+        g.setEdge(source, target, {})
+      }
     }
 
     dagre.layout(g)
@@ -414,6 +582,18 @@ export class DagreLayout implements LayoutEngine {
   }
 
   /**
+   * Blueprint treats authored subgraph direction as local layout intent.
+   * Native Mermaid ignores it when a subgraph links outside, but discussion
+   * maps need vertical stage cards inside a horizontal story.
+   */
+  private _internalDirectionForSubgraph(
+    graph: RenderGraph,
+    localDirection: string | undefined,
+  ): string {
+    return localDirection ?? graph.direction
+  }
+
+  /**
    * Single-pass layout (fallback for when there are no active subgraphs).
    * Preserves the original dagre compound layout behavior.
    */
@@ -451,9 +631,20 @@ export class DagreLayout implements LayoutEngine {
       })
     }
 
+    // Cluster-alias nodes (node id names a subgraph) must not be added as
+    // regular nodes: setNode under a compound parent's id replaces the
+    // parent's attributes and corrupts the cluster layout. Their edges are
+    // routed against the positioned subgraph bounds after layout instead.
+    // Aliases of collapsed subgraphs need no special routing — the summary
+    // node under the same id already stands in for them.
+    const clusterAliasIds = this._clusterAliasIds(graph)
+    const activeAliasIds = new Set(
+      Array.from(clusterAliasIds).filter((id) => !collapsedSubgraphs.has(id)),
+    )
+
     // Add visible nodes
     for (const [id, node] of graph.nodes) {
-      if (hiddenNodeIds.has(id)) continue
+      if (hiddenNodeIds.has(id) || clusterAliasIds.has(id)) continue
       const size = this._nodeSize(node)
       g.setNode(id, {
         label: node.label,
@@ -484,6 +675,8 @@ export class DagreLayout implements LayoutEngine {
       graph.edges, hiddenNodeIds, collapsedSubgraphs,
     )
     for (const edge of edgesToLayout) {
+      if (activeAliasIds.has(edge.source) || activeAliasIds.has(edge.target)) continue
+      if (!this._constrainsHierarchy(edge, edgesToLayout)) continue
       g.setEdge(edge.source, edge.target, {})
     }
 
@@ -506,12 +699,26 @@ export class DagreLayout implements LayoutEngine {
       const originalNode = graph.nodes.get(nodeId)
       const sg = graph.subgraphs.get(nodeId)
 
-      const baseNode = originalNode ?? {
-        id: nodeId,
-        label: sg?.label ?? nodeId,
-        shape: 'rectangle' as const,
-        metadata: {},
-      }
+      const baseNode = collapsedSubgraphs.has(nodeId)
+        ? {
+            ...(originalNode ?? {
+              id: nodeId,
+              label: sg?.label ?? nodeId,
+              shape: 'rounded' as const,
+            }),
+            metadata: {
+              ...(originalNode?.metadata ?? {}),
+              _isCollapsedSummary: true,
+              _subgraphId: nodeId,
+              _childCount: collapsedSubgraphs.get(nodeId)?.length ?? sg?.nodeIds.length ?? 0,
+            },
+          }
+        : (originalNode ?? {
+            id: nodeId,
+            label: sg?.label ?? nodeId,
+            shape: 'rectangle' as const,
+            metadata: {},
+          })
 
       positionedNodes.set(nodeId, {
         ...baseNode,
@@ -522,14 +729,17 @@ export class DagreLayout implements LayoutEngine {
       })
     }
 
-    // Extract edges
+    // Extract edges (cluster-alias edges wait for positioned subgraph bounds)
     const positionedEdges: PositionedEdge[] = []
+    const aliasEdges: RenderEdge[] = []
     for (const edge of edgesToLayout) {
+      if (activeAliasIds.has(edge.source) || activeAliasIds.has(edge.target)) {
+        aliasEdges.push(edge)
+        continue
+      }
       const dagreEdge = g.edge(edge.source, edge.target)
-      if (!dagreEdge) continue
-
       const points =
-        dagreEdge.points && dagreEdge.points.length >= 2
+        dagreEdge?.points && dagreEdge.points.length >= 2
           ? dagreEdge.points
           : [
               { x: g.node(edge.source).x, y: g.node(edge.source).y },
@@ -560,7 +770,7 @@ export class DagreLayout implements LayoutEngine {
             ...sg,
             x: dagreGroup.x,
             y: dagreGroup.y,
-            width: dagreGroup.width,
+            width: Math.max(dagreGroup.width, this._subgraphHeaderWidth(sg.label, sg.nodeIds.length)),
             height: dagreGroup.height,
           })
         }
@@ -607,7 +817,10 @@ export class DagreLayout implements LayoutEngine {
           ...sg,
           x: (minX + maxX) / 2,
           y: (minY + maxY) / 2,
-          width: Math.max(base?.width ?? 0, maxX - minX + padding * 2),
+          width: Math.max(
+            base?.width ?? 0,
+            this._subgraphWidth(sg.label, sg.nodeIds.length, maxX - minX, padding),
+          ),
           height: Math.max(base?.height ?? 0, maxY - minY + padding * 2 + 20),
         })
         pending.delete(sgId)
@@ -615,6 +828,16 @@ export class DagreLayout implements LayoutEngine {
       }
 
       if (!progressed) break
+    }
+
+    for (const edge of aliasEdges) {
+      const routed = this._routeClusterAliasEdge(
+        edge,
+        positionedNodes.get(edge.source),
+        positionedNodes.get(edge.target),
+        positionedSubgraphs,
+      )
+      if (routed) positionedEdges.push(routed)
     }
 
     const graphLabel = g.graph()
@@ -626,6 +849,85 @@ export class DagreLayout implements LayoutEngine {
       width: graphLabel.width ?? 0,
       height: graphLabel.height ?? 0,
     }
+  }
+
+  /**
+   * Node ids that alias a subgraph id. The parser materializes a node when an
+   * edge endpoint names a subgraph (`X --> Cluster`); layout must treat such
+   * endpoints as the cluster itself, never as a free node.
+   */
+  private _clusterAliasIds(graph: RenderGraph): Set<string> {
+    const aliases = new Set<string>()
+    for (const [id] of graph.nodes) {
+      const sg = graph.subgraphs.get(id)
+      if (sg && !sg.nodeIds.includes(id)) aliases.add(id)
+    }
+    return aliases
+  }
+
+  /**
+   * Route an edge with at least one cluster-alias endpoint: anchor that end
+   * on the positioned subgraph's border. Both endpoints are trimmed here
+   * because the renderer can only trim endpoints it resolves to nodes.
+   */
+  private _routeClusterAliasEdge(
+    edge: RenderEdge,
+    srcNode: PositionedNode | undefined,
+    tgtNode: PositionedNode | undefined,
+    subgraphs: Map<string, PositionedSubgraph>,
+  ): PositionedEdge | null {
+    const src = srcNode ?? subgraphs.get(edge.source)
+    const tgt = tgtNode ?? subgraphs.get(edge.target)
+    if (!src || !tgt) return null
+
+    const start = this._rectBoundaryPoint(src, tgt)
+    const end = this._rectBoundaryPoint(tgt, src)
+    return {
+      ...edge,
+      points: [
+        start,
+        { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
+        end,
+      ],
+    }
+  }
+
+  private _rectBoundaryPoint(
+    rect: { x: number; y: number; width: number; height: number },
+    toward: { x: number; y: number },
+  ): { x: number; y: number } {
+    const dx = toward.x - rect.x
+    const dy = toward.y - rect.y
+    if (dx === 0 && dy === 0) return { x: rect.x, y: rect.y }
+    const scale = 1 / Math.max(
+      Math.abs(dx) / (rect.width / 2 || 1),
+      Math.abs(dy) / (rect.height / 2 || 1),
+    )
+    return { x: rect.x + dx * scale, y: rect.y + dy * scale }
+  }
+
+  private _constrainsHierarchy(edge: RenderEdge, edges: RenderEdge[]): boolean {
+    if (this.philosophy !== 'blueprint' || edge.style !== 'dotted') return true
+
+    const adjacency = new Map<string, string[]>()
+    for (const candidate of edges) {
+      if (candidate.id === edge.id || candidate.style === 'dotted') continue
+      const targets = adjacency.get(candidate.source) ?? []
+      targets.push(candidate.target)
+      adjacency.set(candidate.source, targets)
+    }
+
+    const pending = [edge.target]
+    const visited = new Set<string>()
+    while (pending.length > 0) {
+      const current = pending.pop()!
+      if (current === edge.source) return false
+      if (visited.has(current)) continue
+      visited.add(current)
+      pending.push(...(adjacency.get(current) ?? []))
+    }
+
+    return true
   }
 
   /**
@@ -667,8 +969,39 @@ export class DagreLayout implements LayoutEngine {
   }
 
   private _nodeSize(node: RenderNode): { width: number; height: number } {
-    let width = computeNodeWidth(node.label, this.config.nodeMinWidth, this.config.nodePadding)
-    let height = this.config.nodeMinHeight
+    const erTableLayout = computeErEntityTableLayout({
+      ...node,
+      width: this.config.nodeMinWidth,
+      height: this.config.nodeMinHeight,
+    }, this.philosophy === 'blueprint')
+    if (erTableLayout) {
+      return {
+        width: erTableLayout.width,
+        height: erTableLayout.height,
+      }
+    }
+
+    const classCompartmentLayout = computeClassCompartmentLayout({
+      ...node,
+      width: this.config.nodeMinWidth,
+      height: this.config.nodeMinHeight,
+    }, this.philosophy === 'blueprint')
+    if (classCompartmentLayout) {
+      return {
+        width: classCompartmentLayout.width,
+        height: classCompartmentLayout.height,
+      }
+    }
+
+    const labelLayout = computeNodeLabelLayout(
+      node.label,
+      this.config.nodeMinWidth,
+      this.config.nodeMinHeight,
+      this.config.nodePadding,
+      this.philosophy === 'blueprint',
+    )
+    let width = labelLayout.width
+    let height = labelLayout.height
 
     if (node.shape === 'diamond') {
       width = Math.ceil(width * 1.35)
@@ -682,5 +1015,25 @@ export class DagreLayout implements LayoutEngine {
     }
 
     return { width, height }
+  }
+
+  private _subgraphWidth(label: string, nodeCount: number, contentWidth: number, padding: number): number {
+    return Math.max(contentWidth + padding * 2, this._subgraphHeaderWidth(label, nodeCount))
+  }
+
+  private _subgraphHeaderWidth(label: string, nodeCount: number): number {
+    const labelWidth = measureTextWidth(label, SUBGRAPH_LABEL_FONT_SIZE, true)
+    const badgeWidth = nodeCount > 0
+      ? Math.max(SUBGRAPH_BADGE_MIN_WIDTH, String(nodeCount).length * SUBGRAPH_BADGE_CHAR_WIDTH + SUBGRAPH_BADGE_PADDING)
+      : 0
+    const badgeSpace = badgeWidth > 0 ? badgeWidth + SUBGRAPH_BADGE_GAP : 0
+
+    return Math.ceil(
+      SUBGRAPH_LABEL_LEFT_INSET +
+      labelWidth +
+      badgeSpace +
+      SUBGRAPH_LABEL_RIGHT_INSET +
+      SUBGRAPH_HEADER_EXTRA,
+    )
   }
 }

@@ -1,10 +1,10 @@
-# mermaid-render Implementation Plan
+# mermaid-monkey Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build an interactive Mermaid rendering engine (npm library) and VS Code extension with zoom/pan, node folding, multi-file support, cross-file linking, and Gestalt-based layout philosophies.
 
-**Architecture:** pnpm monorepo with two packages — `@mermaid-render/core` (framework-agnostic rendering engine) and `@mermaid-render/vscode` (VS Code extension). Core parses Mermaid text via `mermaid` library's internal API, lays out via dagre, renders via PixiJS.
+**Architecture:** pnpm monorepo with two packages — `@mermaid-monkey/core` (framework-agnostic rendering engine) and `@mermaid-monkey/vscode` (VS Code extension). Core parses Mermaid text via `mermaid` library's internal API, lays out via dagre, renders via PixiJS.
 
 **Tech Stack:** TypeScript, PixiJS 8, mermaid (full library for parsing + db access), @dagrejs/dagre, pnpm workspaces, tsup, esbuild, vitest
 
@@ -35,7 +35,7 @@
 
 ```json
 {
-  "name": "mermaid-render",
+  "name": "mermaid-monkey",
   "private": true,
   "scripts": {
     "build": "pnpm -r build",
@@ -96,7 +96,7 @@ dist/
 `packages/core/package.json`:
 ```json
 {
-  "name": "@mermaid-render/core",
+  "name": "@mermaid-monkey/core",
   "version": "0.1.0",
   "description": "Interactive Mermaid diagram rendering engine",
   "type": "module",
@@ -179,7 +179,7 @@ Expected: dist/ folder created with index.js, index.cjs, index.d.ts (will have b
 
 ```bash
 git add package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.json .gitignore packages/core/
-git commit -m "scaffold: initialize pnpm monorepo with @mermaid-render/core package"
+git commit -m "scaffold: initialize pnpm monorepo with @mermaid-monkey/core package"
 ```
 
 ---
@@ -2188,7 +2188,7 @@ git commit -m "feat: PixiJS renderer — viewport, node sprites, edge graphics, 
 <!DOCTYPE html>
 <html>
 <head>
-  <title>mermaid-render dev</title>
+  <title>mermaid-monkey dev</title>
   <style>
     body { margin: 0; background: #111827; }
     canvas { width: 100vw; height: 100vh; display: block; }
@@ -2410,8 +2410,8 @@ git commit -m "feat: fold/unfold interaction and keyboard shortcuts (F=fit, R=re
 
 ```json
 {
-  "name": "mermaid-render-vscode",
-  "displayName": "Mermaid Render",
+  "name": "mermaid-monkey-vscode",
+  "displayName": "Mermaid Monkey",
   "description": "Interactive Mermaid diagram viewer with zoom, fold, and multi-file support",
   "version": "0.1.0",
   "publisher": "arunjrk",
@@ -2451,7 +2451,7 @@ git commit -m "feat: fold/unfold interaction and keyboard shortcuts (F=fit, R=re
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mermaid-render/core": "workspace:*"
+    "@mermaid-monkey/core": "workspace:*"
   },
   "devDependencies": {
     "@types/vscode": "^1.95.0",
@@ -2663,7 +2663,7 @@ export class RendererPanel {
 }
 ```
 
-Note: The webview script will need the core library bundled into it. This requires a separate esbuild step that bundles `@mermaid-render/core` + PixiJS + mermaid for the webview context. This is a known complexity point — add a `build:webview` script to the vscode package.json that bundles `packages/vscode/src/webview/webview.ts` into a single JS file that gets loaded by the webview HTML.
+Note: The webview script will need the core library bundled into it. This requires a separate esbuild step that bundles `@mermaid-monkey/core` + PixiJS + mermaid for the webview context. This is a known complexity point — add a `build:webview` script to the vscode package.json that bundles `packages/vscode/src/webview/webview.ts` into a single JS file that gets loaded by the webview HTML.
 
 - [ ] **Step 2: Commit**
 
@@ -2757,7 +2757,7 @@ git commit -m "feat: VS Code file explorer — TreeView showing .mmd files in wo
 
 ```typescript
 // packages/vscode/src/webview/webview.ts
-import { MermaidRenderer } from '@mermaid-render/core'
+import { MermaidRenderer } from '@mermaid-monkey/core'
 
 const vscode = acquireVsCodeApi()
 const canvas = document.getElementById('canvas') as HTMLCanvasElement

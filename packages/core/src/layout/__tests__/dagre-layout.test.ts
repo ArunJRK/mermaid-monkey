@@ -176,6 +176,39 @@ describe('DagreLayout', () => {
     expect(result.nodes.size).toBe(3)
   })
 
+  it('keeps solid subgraph stages ordered when a dotted feedback edge returns to another node in the source cluster', () => {
+    const nodes = new Map<string, RenderNode>([
+      ['a1', { id: 'a1', label: 'a1', shape: 'rectangle', metadata: {} }],
+      ['a2', { id: 'a2', label: 'a2', shape: 'rectangle', metadata: {} }],
+      ['b1', { id: 'b1', label: 'b1', shape: 'rectangle', metadata: {} }],
+      ['c1', { id: 'c1', label: 'c1', shape: 'rectangle', metadata: {} }],
+    ])
+    const graph: RenderGraph = {
+      nodes,
+      edges: [
+        { id: 'a1-to-b1', source: 'a1', target: 'b1', style: 'solid' },
+        { id: 'b1-to-c1', source: 'b1', target: 'c1', style: 'solid' },
+        { id: 'c1-to-a2-feedback', source: 'c1', target: 'a2', style: 'dotted' },
+      ],
+      subgraphs: new Map([
+        ['SG3', { id: 'SG3', label: 'Stage 3', nodeIds: ['c1'], collapsed: false }],
+        ['SG1', { id: 'SG1', label: 'Stage 1', nodeIds: ['a1', 'a2'], collapsed: false }],
+        ['SG2', { id: 'SG2', label: 'Stage 2', nodeIds: ['b1'], collapsed: false }],
+      ]),
+      directives: [],
+      direction: 'TD',
+      diagramType: 'flowchart',
+    }
+
+    const result = new DagreLayout({ philosophy: 'blueprint' }).compute(graph)
+    const a1 = result.nodes.get('a1')!
+    const b1 = result.nodes.get('b1')!
+    const c1 = result.nodes.get('c1')!
+
+    expect(b1.y, 'solid Stage 2 must follow Stage 1').toBeGreaterThan(a1.y)
+    expect(c1.y, 'solid Stage 3 must follow Stage 2, regardless of feedback declaration order').toBeGreaterThan(b1.y)
+  })
+
   it('computes subgraph bounds from member nodes', () => {
     const layout = new DagreLayout()
     const result = layout.compute(makeGraph())

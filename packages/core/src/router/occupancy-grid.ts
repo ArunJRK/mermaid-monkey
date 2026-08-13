@@ -47,6 +47,27 @@ export class OccupancyGrid {
     return this._cells[gy * this._cols + gx] === 0
   }
 
+  cellPenalty(gx: number, gy: number): number {
+    if (!this._inBounds(gx, gy)) return Infinity
+    if (!this.isFreeCell(gx, gy)) return Infinity
+
+    let penalty = 0
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        if (dx === 0 && dy === 0) continue
+        const nx = gx + dx
+        const ny = gy + dy
+        if (!this._inBounds(nx, ny)) continue
+        if (this._cells[ny * this._cols + nx] === 0) continue
+
+        const distance = Math.max(Math.abs(dx), Math.abs(dy))
+        penalty = Math.max(penalty, distance === 1 ? 6 : 2)
+      }
+    }
+
+    return penalty
+  }
+
   isFree(worldX: number, worldY: number): boolean {
     const c = this.worldToCell(worldX, worldY)
     return this.isFreeCell(c.gx, c.gy)
@@ -83,10 +104,19 @@ export class OccupancyGrid {
     }
   }
 
-  /** Clear a specific cell (used for temporarily freeing src/tgt ports) */
-  clearCell(gx: number, gy: number): void {
+  /** Clear a specific cell and return whether it was occupied. */
+  clearCell(gx: number, gy: number): boolean {
+    if (!this._inBounds(gx, gy)) return false
+    const index = gy * this._cols + gx
+    const wasOccupied = this._cells[index] === 1
+    this._cells[index] = 0
+    return wasOccupied
+  }
+
+  /** Restore a cell after a scoped routing operation. */
+  restoreCell(gx: number, gy: number, occupied: boolean): void {
     if (this._inBounds(gx, gy)) {
-      this._cells[gy * this._cols + gx] = 0
+      this._cells[gy * this._cols + gx] = occupied ? 1 : 0
     }
   }
 

@@ -14,6 +14,11 @@ const MIN_HOVER_CONTRAST_DELTA = 1.12
 const MIN_SELECTION_CONTRAST = 1.35
 const MIN_DIMMED_TEXT_CONTRAST = 1.6
 const MIN_DIMMED_ALPHA = 0.3
+const MIN_BLUEPRINT_MEETING_HOVER_ALPHA = 0.28
+const MIN_BLUEPRINT_GROUP_FILL_ALPHA = 0.4
+const MIN_BLUEPRINT_GROUP_STROKE_ALPHA = 0.65
+const MIN_BLUEPRINT_CONTEXT_ALPHA = 0.4
+const MAX_BLUEPRINT_HOVER_BACKGROUND_ALPHA = 0.24
 
 function toRgb(hex: number): [number, number, number] {
   return [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255]
@@ -92,6 +97,27 @@ describe('theme emphasis perceptibility', () => {
         theme.dimmedAlpha,
         `${name} dimmed alpha should remain visibly distinct from hidden (alpha 0)`,
       ).toBeGreaterThanOrEqual(MIN_DIMMED_ALPHA)
+
+      expect(
+        theme.hoverDimmedAlpha,
+        `${name} hover background alpha should recede more than focus context`,
+      ).toBeLessThan(theme.dimmedAlpha)
     }
+  })
+
+  it('keeps Blueprint strong enough for live topology discussion', () => {
+    const theme = getTheme('blueprint')
+
+    expect(theme.hoverGlowAlpha).toBeGreaterThanOrEqual(MIN_BLUEPRINT_MEETING_HOVER_ALPHA)
+    expect(theme.dimmedAlpha).toBeGreaterThanOrEqual(MIN_BLUEPRINT_CONTEXT_ALPHA)
+    expect(theme.hoverDimmedAlpha).toBeLessThanOrEqual(MAX_BLUEPRINT_HOVER_BACKGROUND_ALPHA)
+    expect(theme.subgraphFillAlpha).toBeGreaterThanOrEqual(MIN_BLUEPRINT_GROUP_FILL_ALPHA)
+    expect(theme.subgraphStrokeAlpha).toBeGreaterThanOrEqual(MIN_BLUEPRINT_GROUP_STROKE_ALPHA)
+    expect(theme.gridAlpha ?? 1, 'blueprint grid should stay secondary to nodes and groups').toBeLessThanOrEqual(0.24)
+
+    expect(
+      contrastRatio(theme.subgraphLabel, theme.edgeLabelColor),
+      'blueprint group labels should not collapse into passive edge labels',
+    ).toBeGreaterThanOrEqual(1.15)
   })
 })

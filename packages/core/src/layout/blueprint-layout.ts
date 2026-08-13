@@ -1,8 +1,10 @@
-import type { RenderGraph, PositionedGraph, PositionedNode, PositionedEdge } from '../types'
+import type { RenderGraph, PositionedGraph, PositionedNode, PositionedEdge, PositionedSubgraph } from '../types'
 import type { LayoutEngine, LayoutOptions } from './layout-engine'
 import { DagreLayout } from './dagre-layout'
+import { estimateRenderedNodeFootprint } from '../node-footprint'
 
 const GRID_SIZE = 20
+const ANNOTATION_GAP = GRID_SIZE * 4
 
 /**
  * Snap a value to the nearest grid point.
@@ -86,6 +88,71 @@ export function computeWaypoint(
   }
 }
 
+function segmentPathCollides(
+  points: Array<{ x: number; y: number }>,
+  nodes: PositionedNode[],
+  edge: PositionedEdge,
+): boolean {
+  for (let pointIndex = 0; pointIndex < points.length - 1; pointIndex += 1) {
+    const start = points[pointIndex]
+    const end = points[pointIndex + 1]
+
+    for (const node of nodes) {
+      if (node.id === edge.source || node.id === edge.target) continue
+      if (lineIntersectsRect(
+        start.x, start.y,
+        end.x, end.y,
+        node.x, node.y,
+        node.width / 2,
+        node.height / 2,
+      )) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+function pathLength(points: Array<{ x: number; y: number }>): number {
+  let total = 0
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index]
+    const end = points[index + 1]
+    total += Math.abs(end.x - start.x) + Math.abs(end.y - start.y)
+  }
+  return total
+}
+
+function shortestClearOrthogonalDetour(
+  edge: PositionedEdge,
+  node: PositionedNode,
+  nodes: PositionedNode[],
+  margin: number = GRID_SIZE,
+): Array<{ x: number; y: number }> | null {
+  const src = nodes.find((candidate) => candidate.id === edge.source)
+  const tgt = nodes.find((candidate) => candidate.id === edge.target)
+  if (!src || !tgt) return null
+
+  const srcPoint = { x: src.x, y: src.y }
+  const tgtPoint = { x: tgt.x, y: tgt.y }
+  const topY = snapToGrid(node.y - node.height / 2 - margin)
+  const bottomY = snapToGrid(node.y + node.height / 2 + margin)
+  const leftX = snapToGrid(node.x - node.width / 2 - margin)
+  const rightX = snapToGrid(node.x + node.width / 2 + margin)
+
+  const candidates = [
+    [srcPoint, { x: src.x, y: topY }, { x: tgt.x, y: topY }, tgtPoint],
+    [srcPoint, { x: src.x, y: bottomY }, { x: tgt.x, y: bottomY }, tgtPoint],
+    [srcPoint, { x: leftX, y: src.y }, { x: leftX, y: tgt.y }, tgtPoint],
+    [srcPoint, { x: rightX, y: src.y }, { x: rightX, y: tgt.y }, tgtPoint],
+  ]
+
+  return candidates
+    .filter((candidate) => !segmentPathCollides(candidate, nodes, edge))
+    .sort((a, b) => pathLength(a) - pathLength(b))[0] ?? null
+}
+
 /**
  * Given positioned edges and all positioned nodes, check each edge for
  * collisions with non-endpoint nodes and insert waypoints to avoid them.
@@ -119,13 +186,18 @@ export function avoidEdgeCollisions(
           srcX, srcY, tgtX, tgtY,
           node.x, node.y, node.width, node.height,
         )
+        const waypointPath = [
+          { x: srcX, y: srcY },
+          waypoint,
+          { x: tgtX, y: tgtY },
+        ]
+        const detour = segmentPathCollides(waypointPath, nodeList, edge)
+          ? shortestClearOrthogonalDetour(edge, node, nodeList)
+          : null
+
         return {
           ...edge,
-          points: [
-            { x: srcX, y: srcY },
-            waypoint,
-            { x: tgtX, y: tgtY },
-          ],
+          points: detour ?? waypointPath,
         }
       }
     }
@@ -155,6 +227,9 @@ export class BlueprintLayout implements LayoutEngine {
     // Snap nodes to grid
     this._snapNodesToGrid(result.nodes)
 
+    // Keep dotted annotation targets close to the source they explain.
+    this._placeDottedAnnotationTargets(result)
+
     // Resolve overlaps caused by snapping
     this._resolveOverlaps(result.nodes)
 
@@ -167,6 +242,7 @@ export class BlueprintLayout implements LayoutEngine {
     return {
       ...result,
       edges: finalEdges,
+      ...this._dimensionsFor(result.nodes, result.subgraphs),
     }
   }
 
@@ -179,6 +255,12 @@ export class BlueprintLayout implements LayoutEngine {
 
   private _resolveOverlaps(nodes: Map<string, PositionedNode>): void {
     const nodeList = Array.from(nodes.values())
+    const footprints = new Map(
+      nodeList.map((node) => [
+        node.id,
+        estimateRenderedNodeFootprint(node, true),
+      ]),
+    )
     const maxIterations = 20
     const MIN_MARGIN = GRID_SIZE * 2 // minimum 40px gap between any two nodes
 
@@ -189,10 +271,12 @@ export class BlueprintLayout implements LayoutEngine {
         for (let j = i + 1; j < nodeList.length; j++) {
           const a = nodeList[i]
           const b = nodeList[j]
+          const aFootprint = footprints.get(a.id)!
+          const bFootprint = footprints.get(b.id)!
 
           // Check overlap including minimum margin
-          const requiredX = (a.width + b.width) / 2 + MIN_MARGIN
-          const requiredY = (a.height + b.height) / 2 + MIN_MARGIN
+          const requiredX = (aFootprint.width + bFootprint.width) / 2 + MIN_MARGIN
+          const requiredY = (aFootprint.height + bFootprint.height) / 2 + MIN_MARGIN
           const overlapX = Math.abs(a.x - b.x) < requiredX
           const overlapY = Math.abs(a.y - b.y) < requiredY
 
@@ -220,6 +304,247 @@ export class BlueprintLayout implements LayoutEngine {
       }
 
       if (!hasOverlap) break
+    }
+  }
+
+  private _placeDottedAnnotationTargets(graph: PositionedGraph): void {
+    const targetIdsInSubgraphs = new Set<string>()
+    const structuralNodeIds = new Set<string>()
+    for (const edge of graph.edges) {
+      structuralNodeIds.add(edge.source)
+      if (edge.style !== 'dotted') {
+        structuralNodeIds.add(edge.target)
+      }
+    }
+    for (const subgraph of graph.subgraphs.values()) {
+      for (const nodeId of subgraph.nodeIds) {
+        targetIdsInSubgraphs.add(nodeId)
+      }
+    }
+
+    const placedAnnotations: PositionedNode[] = []
+
+    for (const edge of graph.edges) {
+      if (edge.style !== 'dotted') continue
+      if (targetIdsInSubgraphs.has(edge.target)) continue
+      if (structuralNodeIds.has(edge.target)) continue
+
+      const source = graph.nodes.get(edge.source)
+      const target = graph.nodes.get(edge.target)
+      if (!source || !target) continue
+      if (placedAnnotations.some((node) => node.id === target.id)) continue
+
+      const sourceSubgraph = this._nearestSubgraphForNode(edge.source, graph.subgraphs)
+      const sourceOrientation = sourceSubgraph
+        ? this._subgraphOrientation(sourceSubgraph, graph.nodes)
+        : 'vertical'
+
+      if (sourceOrientation === 'horizontal') {
+        this._placeAnnotationBelowSourceGroup(target, source, sourceSubgraph, graph.nodes, graph.subgraphs)
+        this._nudgeAnnotation(target, placedAnnotations, 'horizontal')
+      } else {
+        this._placeAnnotationBesideSourceNode(target, source)
+        this._nudgeAnnotation(target, placedAnnotations, 'vertical')
+      }
+
+      placedAnnotations.push(target)
+    }
+  }
+
+  private _nearestSubgraphForNode(
+    nodeId: string,
+    subgraphs: Map<string, PositionedSubgraph>,
+  ): PositionedSubgraph | null {
+    const candidates = Array.from(subgraphs.values())
+      .filter((subgraph) => subgraph.nodeIds.includes(nodeId))
+      .sort((left, right) => (left.width * left.height) - (right.width * right.height))
+    return candidates[0] ?? null
+  }
+
+  private _subgraphOrientation(
+    subgraph: PositionedSubgraph,
+    nodes: Map<string, PositionedNode>,
+  ): 'horizontal' | 'vertical' {
+    const members = subgraph.nodeIds
+      .map((nodeId) => nodes.get(nodeId))
+      .filter((node): node is PositionedNode => node !== undefined)
+
+    if (members.length >= 2) {
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+
+      for (const member of members) {
+        const footprint = estimateRenderedNodeFootprint(member, true)
+        minX = Math.min(minX, member.x - footprint.width / 2)
+        minY = Math.min(minY, member.y - footprint.height / 2)
+        maxX = Math.max(maxX, member.x + footprint.width / 2)
+        maxY = Math.max(maxY, member.y + footprint.height / 2)
+      }
+
+      const spanX = maxX - minX
+      const spanY = maxY - minY
+      if (spanX > spanY * 1.35) return 'horizontal'
+    }
+
+    return 'vertical'
+  }
+
+  private _placeAnnotationBelowSourceGroup(
+    target: PositionedNode,
+    source: PositionedNode,
+    sourceSubgraph: PositionedSubgraph | null,
+    nodes: Map<string, PositionedNode>,
+    subgraphs: Map<string, PositionedSubgraph>,
+  ): void {
+    const targetFootprint = estimateRenderedNodeFootprint(target, true)
+    const sourceFootprint = estimateRenderedNodeFootprint(source, true)
+    const groupBounds = sourceSubgraph
+      ? this._memberBounds(sourceSubgraph, nodes)
+      : {
+          top: source.y - sourceFootprint.height / 2,
+          right: source.x + sourceFootprint.width / 2,
+          bottom: source.y + sourceFootprint.height / 2,
+        }
+
+    target.x = snapToGrid(source.x)
+    target.y = snapToGrid(groupBounds.bottom + ANNOTATION_GAP + targetFootprint.height / 2)
+
+    if (
+      sourceSubgraph
+      && this._annotationCollidesWithSiblingSubgraph(target, sourceSubgraph, subgraphs)
+    ) {
+      target.y = snapToGrid(groupBounds.top - ANNOTATION_GAP - targetFootprint.height / 2)
+    }
+  }
+
+  private _placeAnnotationBesideSourceNode(
+    target: PositionedNode,
+    source: PositionedNode,
+  ): void {
+    const targetFootprint = estimateRenderedNodeFootprint(target, true)
+    const sourceFootprint = estimateRenderedNodeFootprint(source, true)
+
+    target.x = snapToGrid(source.x + sourceFootprint.width / 2 + ANNOTATION_GAP + targetFootprint.width / 2)
+    target.y = snapToGrid(source.y)
+  }
+
+  private _memberBounds(
+    subgraph: PositionedSubgraph,
+    nodes: Map<string, PositionedNode>,
+  ): { top: number; right: number; bottom: number } {
+    let top = subgraph.y - subgraph.height / 2
+    let right = subgraph.x + subgraph.width / 2
+    let bottom = subgraph.y + subgraph.height / 2
+
+    for (const nodeId of subgraph.nodeIds) {
+      const node = nodes.get(nodeId)
+      if (!node) continue
+      const footprint = estimateRenderedNodeFootprint(node, true)
+      top = Math.min(top, node.y - footprint.height / 2)
+      right = Math.max(right, node.x + footprint.width / 2)
+      bottom = Math.max(bottom, node.y + footprint.height / 2)
+    }
+
+    return { top, right, bottom }
+  }
+
+  private _annotationCollidesWithSiblingSubgraph(
+    target: PositionedNode,
+    sourceSubgraph: PositionedSubgraph,
+    subgraphs: Map<string, PositionedSubgraph>,
+  ): boolean {
+    const targetFootprint = estimateRenderedNodeFootprint(target, true)
+
+    for (const subgraph of subgraphs.values()) {
+      if (subgraph.id === sourceSubgraph.id) continue
+      if (subgraph.nodeIds.includes(sourceSubgraph.id)) continue
+      if (!this._rectsOverlap(
+        target.x, target.y, targetFootprint.width, targetFootprint.height,
+        subgraph.x, subgraph.y, subgraph.width, subgraph.height,
+        GRID_SIZE,
+      )) continue
+      return true
+    }
+
+    return false
+  }
+
+  private _rectsOverlap(
+    leftX: number,
+    leftY: number,
+    leftWidth: number,
+    leftHeight: number,
+    rightX: number,
+    rightY: number,
+    rightWidth: number,
+    rightHeight: number,
+    margin: number = 0,
+  ): boolean {
+    const overlapX = Math.abs(leftX - rightX) < (leftWidth + rightWidth) / 2 + margin
+    const overlapY = Math.abs(leftY - rightY) < (leftHeight + rightHeight) / 2 + margin
+    return overlapX && overlapY
+  }
+
+  private _nudgeAnnotation(
+    target: PositionedNode,
+    placedAnnotations: PositionedNode[],
+    axis: 'horizontal' | 'vertical',
+  ): void {
+    const margin = GRID_SIZE * 2
+    let attempts = 0
+
+    while (attempts < 20 && placedAnnotations.some((placed) => this._nodesOverlap(target, placed, margin))) {
+      if (axis === 'horizontal') {
+        target.x = snapToGrid(target.x + GRID_SIZE)
+      } else {
+        target.y = snapToGrid(target.y + GRID_SIZE)
+      }
+      attempts += 1
+    }
+  }
+
+  private _nodesOverlap(left: PositionedNode, right: PositionedNode, margin: number): boolean {
+    const leftFootprint = estimateRenderedNodeFootprint(left, true)
+    const rightFootprint = estimateRenderedNodeFootprint(right, true)
+    const overlapX = Math.abs(left.x - right.x) < (leftFootprint.width + rightFootprint.width) / 2 + margin
+    const overlapY = Math.abs(left.y - right.y) < (leftFootprint.height + rightFootprint.height) / 2 + margin
+    return overlapX && overlapY
+  }
+
+  private _dimensionsFor(
+    nodes: Map<string, PositionedNode>,
+    subgraphs: Map<string, PositionedSubgraph>,
+  ): Pick<PositionedGraph, 'width' | 'height'> {
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+
+    const includeRect = (x: number, y: number, width: number, height: number) => {
+      minX = Math.min(minX, x - width / 2)
+      minY = Math.min(minY, y - height / 2)
+      maxX = Math.max(maxX, x + width / 2)
+      maxY = Math.max(maxY, y + height / 2)
+    }
+
+    for (const node of nodes.values()) {
+      const footprint = estimateRenderedNodeFootprint(node, true)
+      includeRect(node.x, node.y, footprint.width, footprint.height)
+    }
+
+    for (const subgraph of subgraphs.values()) {
+      includeRect(subgraph.x, subgraph.y, subgraph.width, subgraph.height)
+    }
+
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+      return { width: 0, height: 0 }
+    }
+
+    return {
+      width: Math.ceil(maxX - minX),
+      height: Math.ceil(maxY - minY),
     }
   }
 

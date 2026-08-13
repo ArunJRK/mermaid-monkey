@@ -9,6 +9,8 @@ type DevSnapshot = {
   edgeCount: number
   subgraphCount: number
   selectedNodeId: string | null
+  selectedNodeIds: string[]
+  selectedEdgeIds: string[]
   focusStack: string[]
   renderedBounds: { minX: number; minY: number; maxX: number; maxY: number } | null
   viewportScale: number | null
@@ -48,6 +50,8 @@ type RenderedNodeMetrics = {
   layerIndex: number
   labelFill: number
   labelFontFamily: string
+  labelText: string
+  labelSegmentFontFamilies: string[]
   nodeFill: number
   nodeStroke: number
   brokenBadgeAccent: number | null
@@ -66,11 +70,15 @@ type RenderedEdgeMetrics = {
   source: string
   target: string
   alpha: number
+  hovered: boolean
+  selected: boolean
   layerIndex: number
   points: Array<{ x: number; y: number }>
   screenPoints: Array<{ x: number; y: number }>
   routedSegments: Array<{ x1: number; y1: number; x2: number; y2: number; isHorizontal: boolean }>
   bounds: Rect
+  hitBounds: Rect | null
+  hitPadding: number
   labelBounds: Rect | null
   strokeColor: number
   labelFill: number | null
@@ -80,6 +88,8 @@ type RenderedEdgeMetrics = {
   arrowWingA: { x: number; y: number } | null
   arrowWingB: { x: number; y: number } | null
   arrowAngle: number | null
+  erSourceCardinality: string | null
+  erTargetCardinality: string | null
 }
 
 type RenderedSubgraphMetrics = {
@@ -92,9 +102,14 @@ type RenderedSubgraphMetrics = {
   fillColor: number
   labelFill: number
   labelFontFamily: string
+  labelText: string
+  labelBounds: Rect
   accent: number
   chevronVisible: boolean
   badgeVisible: boolean
+  badgeText: string | null
+  badgeBounds: Rect | null
+  badgeTextBounds: Rect | null
 }
 
 type LifecycleProbe = {
@@ -295,6 +310,10 @@ type PerfHarnessResult = {
   stress: PerfSample
 }
 
+type GraphClickOptions = Parameters<Page['mouse']['click']>[2] & {
+  modifiers?: string[]
+}
+
 async function attachPageErrorTracking(page: Page) {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
@@ -347,10 +366,24 @@ function pointOnNodeRectBoundary(
   return withinX && withinY && (nearVertical || nearHorizontal)
 }
 
-async function clickNode(page: Page, nodeId: string) {
+async function clickGraphPoint(page: Page, x: number, y: number, options: GraphClickOptions = {}) {
+  const { modifiers = [], ...mouseOptions } = options
+  for (const modifier of modifiers) {
+    await page.keyboard.down(modifier)
+  }
+  try {
+    await page.mouse.click(x, y, { ...mouseOptions, modifiers })
+  } finally {
+    for (const modifier of modifiers.slice().reverse()) {
+      await page.keyboard.up(modifier)
+    }
+  }
+}
+
+async function clickNode(page: Page, nodeId: string, options: GraphClickOptions = {}) {
   const bounds = await page.evaluate((id) => window.__MERMAID_DEV__!.getNodeScreenBounds(id), nodeId)
   expect(bounds).not.toBeNull()
-  await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2)
+  await clickGraphPoint(page, bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2, options)
 }
 
 async function hoverNode(page: Page, nodeId: string) {
@@ -365,6 +398,11 @@ async function hoverNode(page: Page, nodeId: string) {
     }, nodeId)
     if (hovered) return
   }
+}
+
+async function nodeIds(page: Page): Promise<string[]> {
+  const nodes = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedNodeMetrics() as RenderedNodeMetrics[])
+  return nodes.map((node) => node.id)
 }
 
 async function findEmptyCanvasPoint(page: Page): Promise<{ x: number; y: number }> {
@@ -1286,6 +1324,89 @@ ${lines.map((line) => `  ${line}`).join('\n')}`, '/__blueprint-deterministic__.m
     expect(pageErrors).toEqual([])
   })
 
+  test('fitToView contains wide Blueprint diagrams instead of cropping at readable zoom', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await page.setViewportSize({ width: 1200, height: 800 })
+    await waitForDevApi(page)
+
+    const loaded = await page.evaluate(async () => {
+      const nodes = Array.from({ length: 18 }, (_, index) => {
+        return `  n${index}[Wide topology stage ${index} with contract label]`
+      })
+      const edges = Array.from({ length: 17 }, (_, index) => `  n${index} --> n${index + 1}`)
+      return await window.__MERMAID_DEV__!.loadSource(
+        ['%% @layout blueprint', 'graph LR', ...nodes, ...edges].join('\n'),
+        '/__wide-blueprint-fit__.mmd',
+      )
+    })
+    expect(loaded).toBeTruthy()
+
+    await page.evaluate(() => window.__MERMAID_DEV__!.fitToView())
+    await expect.poll(async () => (await snapshot(page)).viewportAlpha).toBe(1)
+
+    const state = await snapshot(page)
+    expect(state.renderedBounds).not.toBeNull()
+    expect(state.canvasClientSize).not.toBeNull()
+    expect(state.viewportScale).toBeGreaterThan(0)
+    expect(state.viewportScale).toBeLessThan(0.5)
+
+    const canvasBox = await page.locator('#canvas').boundingBox()
+    expect(canvasBox).not.toBeNull()
+
+    const first = await page.evaluate(() => window.__MERMAID_DEV__!.getNodeScreenBounds('n0'))
+    const last = await page.evaluate(() => window.__MERMAID_DEV__!.getNodeScreenBounds('n17'))
+    expect(first).not.toBeNull()
+    expect(last).not.toBeNull()
+    expect(first!.x).toBeGreaterThanOrEqual(canvasBox!.x - 1)
+    expect(last!.x + last!.width).toBeLessThanOrEqual(canvasBox!.x + canvasBox!.width + 1)
+
+    expect(pageErrors).toEqual([])
+  })
+
+  test('fitToView keeps small grouped Blueprint maps readable instead of over-shrinking them', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await page.setViewportSize({ width: 520, height: 420 })
+    await waitForDevApi(page)
+
+    const loaded = await page.evaluate(async () => {
+      window.__MERMAID_DEV__!.setLayout('blueprint')
+      return await window.__MERMAID_DEV__!.loadSource(`flowchart LR
+  subgraph MOVE["MOVE / bronze"]
+    direction TB
+    Source["Source"]
+    UploadFile["UploadFile"]
+    Sheet["Sheet"]
+    Source --> UploadFile --> Sheet
+  end
+  subgraph SHAPE["SHAPE / silver"]
+    direction TB
+    Table["Table"]
+    Column["Column"]
+    Entity["Entity"]
+    Table --> Column
+    Table --> Entity
+  end
+  subgraph SERVE["SERVE / gold"]
+    direction TB
+    View["View"]
+    Dataset["Dataset"]
+  end
+  Sheet --> Table
+  Table --> View
+  Table --> Dataset`, '/__small-grouped-blueprint-fit__.mmd')
+    })
+    expect(loaded).toBe(true)
+
+    await expect.poll(async () => (await snapshot(page)).viewportAlpha).toBe(1)
+
+    const state = await snapshot(page)
+    expect(state.viewportScale).not.toBeNull()
+    expect(state.viewportScale!).toBeGreaterThanOrEqual(0.42)
+    expect(state.subgraphCount).toBe(3)
+
+    expect(pageErrors).toEqual([])
+  })
+
   test('re-fits content and keeps the canvas crisp after container resize', async ({ page }) => {
     const pageErrors = await attachPageErrorTracking(page)
     await waitForDevApi(page)
@@ -1435,6 +1556,58 @@ ${lines.map((line) => `  ${line}`).join('\n')}`, '/__blueprint-deterministic__.m
     const state = await snapshot(page)
     expect(state.nodeCount).toBeGreaterThan(0)
     expect(state.edgeCount).toBeGreaterThan(0)
+    expect(pageErrors).toEqual([])
+  })
+
+  test('can expand a collapsed blueprint subgraph from the canvas', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await waitForDevApi(page)
+
+    const loaded = await page.evaluate(() => window.__MERMAID_DEV__!.loadSource(`%% @layout blueprint
+graph TD
+  subgraph core[Core Services]
+    A[API]
+    B[Service]
+    C[Worker]
+    A --> B
+    C --> B
+  end
+`, '/__subgraph-toggle__.mmd'))
+    expect(loaded).toBe(true)
+    await page.evaluate(() => window.__MERMAID_DEV__!.setLayout('blueprint'))
+    await expect.poll(async () => (await snapshot(page)).currentLayout).toBe('blueprint')
+
+    const subgraphMembers = await page.evaluate(() => {
+      const subgraph = window.__MERMAID_DEV__!.getRenderedSubgraphMetrics() as RenderedSubgraphMetrics[]
+      return subgraph.find((entry) => entry.id === 'core')?.nodeIds ?? []
+    })
+    expect(subgraphMembers.length).toBeGreaterThan(0)
+
+    const expandedNodeIds = await nodeIds(page)
+    for (const id of subgraphMembers) {
+      expect(expandedNodeIds).toContain(id)
+    }
+
+    await page.evaluate(() => window.__MERMAID_DEV__!.foldNode('core'))
+    await expect.poll(async () => (await snapshot(page)).foldedSubgraphs).toContain('core')
+
+    const collapsedNodeIds = await nodeIds(page)
+    expect(collapsedNodeIds).toContain('core')
+    for (const id of subgraphMembers) {
+      expect(collapsedNodeIds).not.toContain(id)
+    }
+
+    const summaryBounds = await page.evaluate(() => window.__MERMAID_DEV__!.getNodeScreenBounds('core'))
+    expect(summaryBounds).not.toBeNull()
+    await page.mouse.click(summaryBounds!.x + summaryBounds!.width / 2, summaryBounds!.y + summaryBounds!.height / 2)
+
+    await expect.poll(async () => (await snapshot(page)).foldedSubgraphs).not.toContain('core')
+
+    const expandedAgainNodeIds = await nodeIds(page)
+    for (const id of subgraphMembers) {
+      expect(expandedAgainNodeIds).toContain(id)
+    }
+
     expect(pageErrors).toEqual([])
   })
 
@@ -2549,6 +2722,228 @@ graph TD
     expect(pageErrors).toEqual([])
   })
 
+  test('preserves authored Mermaid class colors in Blueprint', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await waitForDevApi(page)
+
+    await page.evaluate(async () => {
+      window.__MERMAID_DEV__!.setLayout('blueprint')
+      return await window.__MERMAID_DEV__!.loadSource(`flowchart LR
+classDef canon fill:#e6f7ee,stroke:#2e9e6b,color:#0b3d26;
+classDef note fill:#fff7e6,stroke:#d9a521,color:#6b4e00,stroke-dasharray:3 2;
+S["Source / Connector"]:::canon
+N["Wrong name"]:::note
+S -.-> N`, '/__blueprint-class-colors__.mmd')
+    })
+
+    await expect.poll(async () => (await snapshot(page)).currentLayout).toBe('blueprint')
+    const metrics = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedNodeMetrics() as RenderedNodeMetrics[])
+    const source = metrics.find((node) => node.id === 'S')
+    const note = metrics.find((node) => node.id === 'N')
+
+    expect(source).toBeDefined()
+    expect(note).toBeDefined()
+    expect(source).toMatchObject({
+      nodeFill: 0xe6f7ee,
+      nodeStroke: 0x2e9e6b,
+      labelFill: 0x0b3d26,
+      labelFontFamily: 'MermaidBlueprint',
+    })
+    expect(note).toMatchObject({
+      nodeFill: 0xfff7e6,
+      nodeStroke: 0xd9a521,
+      labelFill: 0x6b4e00,
+      labelFontFamily: 'MermaidBlueprint',
+    })
+    expect(pageErrors).toEqual([])
+  })
+
+  test('sanitizes Mermaid HTML labels and renders allowed bold spans in Blueprint nodes', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await waitForDevApi(page)
+
+    await page.evaluate(async () => {
+      window.__MERMAID_DEV__!.setLayout('blueprint')
+      return await window.__MERMAID_DEV__!.loadSource(`flowchart LR
+A["<b>Upload + config panel</b><br/><script>alert(1)</script><em>CSV/Excel</em> · admin"]
+B["Plain target"]
+A --> B`, '/__blueprint-rich-label__.mmd')
+    })
+
+    await expect.poll(async () => (await snapshot(page)).currentLayout).toBe('blueprint')
+    const metrics = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedNodeMetrics() as RenderedNodeMetrics[])
+    const source = metrics.find((node) => node.id === 'A')
+
+    expect(source).toBeDefined()
+    expect(source!.labelText).toContain('Upload + config panel')
+    expect(source!.labelText).toContain('CSV/Excel')
+    expect(source!.labelText).not.toContain('<')
+    expect(source!.labelText).not.toContain('alert')
+    expect(source!.labelSegmentFontFamilies).toContain('MermaidBlueprintBold')
+    expect(source!.labelSegmentFontFamilies).toContain('MermaidBlueprint')
+    expect(rectContainsRect(source!.shapeBounds, source!.labelBounds, 1.5)).toBe(true)
+    expect(pageErrors).toEqual([])
+  })
+
+  test('renders class diagrams as Blueprint compartments with relationship wires', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await waitForDevApi(page)
+
+    await page.evaluate(async () => {
+      window.__MERMAID_DEV__!.setLayout('blueprint')
+      return await window.__MERMAID_DEV__!.loadSource(`classDiagram
+direction LR
+class Repository~T~ {
+  +find(id: string) T
+  +save(entity: T) void
+}
+class UserService {
+  -repo: Repository~User~
+  +activate(userId: string) Result
+}
+UserService --> Repository : uses`, '/__blueprint-class-compartments__.mmd')
+    })
+
+    await expect.poll(async () => (await snapshot(page)).currentLayout).toBe('blueprint')
+    const state = await snapshot(page)
+    expect(state.nodeCount).toBe(2)
+    expect(state.edgeCount).toBe(1)
+
+    const nodes = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedNodeMetrics() as RenderedNodeMetrics[])
+    const edges = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedEdgeMetrics() as RenderedEdgeMetrics[])
+    const service = nodes.find((node) => node.id === 'UserService')
+    const repository = nodes.find((node) => node.id === 'Repository')
+    const dependency = edges.find((edge) => edge.source === 'UserService' && edge.target === 'Repository')
+
+    expect(service).toBeDefined()
+    expect(repository).toBeDefined()
+    expect(dependency).toBeDefined()
+    expect(service!.labelText).toContain('UserService')
+    expect(service!.labelText).toContain('- repo: Repository<User>')
+    expect(service!.labelText).toContain('+ activate(userId: string): Result')
+    expect(repository!.labelText).toContain('Repository')
+    expect(repository!.labelText).toContain('+ find(id: string): T')
+    expect(rectContainsRect(service!.shapeBounds, service!.labelBounds, 1.5)).toBe(true)
+    expect(rectContainsRect(repository!.shapeBounds, repository!.labelBounds, 1.5)).toBe(true)
+    expect(dependency!.bounds.width + dependency!.bounds.height).toBeGreaterThan(20)
+    expect(pageErrors).toEqual([])
+  })
+
+  test('renders state diagrams as Blueprint transition maps with composite states', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await waitForDevApi(page)
+
+    await page.evaluate(async () => {
+      window.__MERMAID_DEV__!.setLayout('blueprint')
+      return await window.__MERMAID_DEV__!.loadSource(`stateDiagram-v2
+direction LR
+[*] --> Draft
+Draft --> InReview: submit
+InReview --> Approved: approve
+InReview --> Draft: request changes
+Approved --> [*]
+state InReview {
+  [*] --> Waiting
+  Waiting --> Escalated: stale
+  Escalated --> Waiting: owner responds
+}`, '/__blueprint-state-transitions__.mmd')
+    })
+
+    await expect.poll(async () => (await snapshot(page)).currentLayout).toBe('blueprint')
+    const state = await snapshot(page)
+    expect(state.nodeCount).toBe(8)
+    expect(state.edgeCount).toBe(8)
+    expect(state.subgraphCount).toBe(1)
+
+    const nodes = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedNodeMetrics() as RenderedNodeMetrics[])
+    const edges = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedEdgeMetrics() as RenderedEdgeMetrics[])
+    const subgraphs = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedSubgraphMetrics() as RenderedSubgraphMetrics[])
+    const draft = nodes.find((node) => node.id === 'Draft')
+    const review = nodes.find((node) => node.id === 'InReview')
+    const composite = subgraphs.find((subgraph) => subgraph.id === 'state:InReview')
+    const submit = edges.find((edge) => edge.id === 'state:Draft:InReview:submit')
+
+    expect(draft).toBeDefined()
+    expect(review).toBeDefined()
+    expect(composite).toBeDefined()
+    expect(submit).toBeDefined()
+    expect(draft!.labelText).toContain('Draft')
+    expect(review!.labelText).toContain('InReview')
+    expect(composite!.labelText).toContain('InReview')
+    expect(composite!.nodeIds).toEqual(['InReview_start', 'Waiting', 'Escalated'])
+    expect(submit!.labelVisible).toBe(true)
+    expect(submit!.labelBounds?.width ?? 0).toBeGreaterThan(10)
+    expect(rectContainsRect(draft!.shapeBounds, draft!.labelBounds, 1.5)).toBe(true)
+    expect(pageErrors).toEqual([])
+  })
+
+  test('renders ER cardinality as endpoint glyphs instead of label clutter', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await waitForDevApi(page)
+
+    await page.evaluate(async () => {
+      window.__MERMAID_DEV__!.setLayout('blueprint')
+      return await window.__MERMAID_DEV__!.loadSource(`erDiagram
+CUSTOMER ||--o{ ORDER : places
+ORDER }o--|| ACCOUNT : billed_to
+CUSTOMER {
+  string id PK
+  string name
+}
+ORDER {
+  string id PK
+  string customer_id FK
+}
+ACCOUNT {
+  string id PK
+  string status
+}`, '/__blueprint-er-cardinality-glyphs__.mmd')
+    })
+
+    await expect.poll(async () => (await snapshot(page)).currentLayout).toBe('blueprint')
+    const edges = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedEdgeMetrics() as RenderedEdgeMetrics[])
+    const places = edges.find((edge) => edge.id === 'er:CUSTOMER:ORDER:places:ONLY_ONE:ZERO_OR_MORE:IDENTIFYING')
+    const billed = edges.find((edge) => edge.id === 'er:ORDER:ACCOUNT:billed_to:ZERO_OR_MORE:ONLY_ONE:IDENTIFYING')
+
+    expect(places).toBeDefined()
+    expect(billed).toBeDefined()
+    expect(places!.erSourceCardinality).toBe('ONLY_ONE')
+    expect(places!.erTargetCardinality).toBe('ZERO_OR_MORE')
+    expect(billed!.erSourceCardinality).toBe('ZERO_OR_MORE')
+    expect(billed!.erTargetCardinality).toBe('ONLY_ONE')
+    expect(places!.labelVisible).toBe(true)
+    expect(places!.arrowTip).toBeNull()
+    expect(billed!.arrowTip).toBeNull()
+    expect(pageErrors).toEqual([])
+  })
+
+  test('preserves authored Mermaid linkStyle colors in Blueprint wires', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await waitForDevApi(page)
+
+    await page.evaluate(async () => {
+      window.__MERMAID_DEV__!.setLayout('blueprint')
+      return await window.__MERMAID_DEV__!.loadSource(`flowchart LR
+A["Source"] --> B["Model"]
+B -.-> C["Annotation"]
+linkStyle 0 stroke:#00ffcc,stroke-width:4px;
+linkStyle 1 stroke:#d9a521,stroke-width:2px,stroke-dasharray:3 2;`, '/__blueprint-linkstyle-colors__.mmd')
+    })
+
+    await expect.poll(async () => (await snapshot(page)).currentLayout).toBe('blueprint')
+    const edges = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedEdgeMetrics() as RenderedEdgeMetrics[])
+    const primary = edges.find((edge) => edge.source === 'A' && edge.target === 'B')
+    const note = edges.find((edge) => edge.source === 'B' && edge.target === 'C')
+
+    expect(primary).toBeDefined()
+    expect(note).toBeDefined()
+    expect(primary!.strokeColor).toBe(0x00ffcc)
+    expect(note!.strokeColor).toBe(0xd9a521)
+    expect(primary!.bounds.width + primary!.bounds.height).toBeGreaterThan(20)
+    expect(note!.bounds.width + note!.bounds.height).toBeGreaterThan(20)
+    expect(pageErrors).toEqual([])
+  })
+
   test('applies distinct subgraph depth fills for every shipped philosophy', async ({ page }) => {
     const pageErrors = await attachPageErrorTracking(page)
     await waitForDevApi(page)
@@ -2632,6 +3027,10 @@ graph TD
           minRectInset(subgraph.bounds, node.shapeBounds),
           `${subgraph.id} should keep visible padding around node ${node.id}`,
         ).toBeGreaterThanOrEqual(6)
+        expect(
+          node.shapeBounds.y - subgraph.bounds.y,
+          `${subgraph.id} should keep node ${node.id} below the readable group header`,
+        ).toBeGreaterThanOrEqual(32)
       }
     }
 
@@ -2658,6 +3057,50 @@ graph TD
     const nestedCanvas = await page.locator('#canvas').screenshot()
     expect(nestedCanvas).toMatchSnapshot('nested-subgraph-containment.png')
 
+    expect(pageErrors).toEqual([])
+  })
+
+  test('keeps long subgraph headers and count badges inside the container', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await waitForDevApi(page)
+
+    const loaded = await page.evaluate(async () => {
+      window.__MERMAID_DEV__!.setLayout('blueprint')
+      return await window.__MERMAID_DEV__!.loadSource(`flowchart TD
+        subgraph CANON["Canonical source to gold transformation controls"]
+          direction TB
+          N01["Extract"]
+          N02["Normalize"]
+          N03["Validate"]
+          N04["Version"]
+          N05["Map"]
+          N06["Enrich"]
+          N07["Dedupe"]
+          N08["Classify"]
+          N09["Score"]
+          N10["Review"]
+          N11["Publish"]
+          N12["Audit"]
+        end
+        N01 --> N02 --> N03 --> N04 --> N05 --> N06 --> N07 --> N08 --> N09 --> N10 --> N11 --> N12
+      `, '/__subgraph-header-badge-fit__.mmd')
+    })
+    expect(loaded).toBe(true)
+    await expect.poll(async () => (await snapshot(page)).currentLayout).toBe('blueprint')
+    await expect.poll(async () => (await snapshot(page)).subgraphCount).toBeGreaterThanOrEqual(1)
+
+    const subgraphs = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedSubgraphMetrics() as RenderedSubgraphMetrics[])
+    const canon = subgraphs.find((subgraph) => subgraph.id === 'CANON')
+
+    expect(canon).toBeDefined()
+    expect(canon!.labelText).toBe('Canonical source to gold transformation controls')
+    expect(canon!.badgeText).toBe('12')
+    expect(canon!.badgeBounds).not.toBeNull()
+    expect(canon!.badgeTextBounds).not.toBeNull()
+    expect(rectContainsRect(canon!.bounds, canon!.labelBounds, 1.5)).toBe(true)
+    expect(rectContainsRect(canon!.bounds, canon!.badgeBounds!, 1.5)).toBe(true)
+    expect(rectContainsRect(canon!.badgeBounds!, canon!.badgeTextBounds!, 2)).toBe(true)
+    expect(canon!.labelBounds.x + canon!.labelBounds.width).toBeLessThanOrEqual(canon!.badgeBounds!.x - 2)
     expect(pageErrors).toEqual([])
   })
 
@@ -2746,6 +3189,56 @@ graph TD
     expect(pageErrors).toEqual([])
   })
 
+  test('keeps every shift-clicked node and edge visually selected', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await waitForDevApi(page)
+
+    await page.evaluate(async () => {
+      window.__MERMAID_DEV__!.setLayout('blueprint')
+      await window.__MERMAID_DEV__!.loadSource(`flowchart LR
+        Gateway[Gateway] --> OrderSvc[Order Service]
+        OrderSvc --> PaymentSvc[Payment Service]
+        NotifSvc[Notification Service] --> Email[Email]
+      `, '/__multi-selection__.mmd')
+    })
+    await expect.poll(async () => (await snapshot(page)).currentLayout).toBe('blueprint')
+
+    const gatewayOrderEdgeId = await page.evaluate(() => {
+      const edges = window.__MERMAID_DEV__!.getRenderedEdgeMetrics() as RenderedEdgeMetrics[]
+      return edges.find((edge) => edge.source === 'Gateway' && edge.target === 'OrderSvc')!.id
+    })
+
+    await page.evaluate(() => window.__MERMAID_DEV__!.selectNode('Gateway'))
+    await expect.poll(async () => (await snapshot(page)).selectedNodeIds).toEqual(['Gateway'])
+    await page.evaluate(() => window.__MERMAID_DEV__!.selectNode('OrderSvc', { additive: true }))
+    await expect.poll(async () => (await snapshot(page)).selectedNodeIds.sort()).toEqual(['Gateway', 'OrderSvc'])
+    await page.evaluate((edgeId) => window.__MERMAID_DEV__!.selectEdge(edgeId, { additive: true }), gatewayOrderEdgeId)
+
+    const selectionState = await page.evaluate(() => {
+      const nodes = window.__MERMAID_DEV__!.getRenderedNodeMetrics() as RenderedNodeMetrics[]
+      const edges = window.__MERMAID_DEV__!.getRenderedEdgeMetrics() as RenderedEdgeMetrics[]
+      return {
+        snapshot: window.__MERMAID_DEV__!.snapshot(),
+        gateway: nodes.find((node) => node.id === 'Gateway')!,
+        orderSvc: nodes.find((node) => node.id === 'OrderSvc')!,
+        unrelated: nodes.find((node) => node.id === 'Email')!,
+        gatewayOrderEdge: edges.find((edge) => edge.source === 'Gateway' && edge.target === 'OrderSvc')!,
+        unrelatedEdge: edges.find((edge) => edge.source === 'NotifSvc' && edge.target === 'Email')!,
+      }
+    })
+
+    expect(selectionState.snapshot.selectedNodeIds.sort()).toEqual(['Gateway', 'OrderSvc'])
+    expect(selectionState.snapshot.selectedEdgeIds).toContain(selectionState.gatewayOrderEdge.id)
+    expect(selectionState.gateway.selectionAlpha).toBeGreaterThan(0)
+    expect(selectionState.orderSvc.selectionAlpha).toBeGreaterThan(0)
+    expect(selectionState.unrelated.selectionAlpha).toBe(0)
+    expect(selectionState.gatewayOrderEdge.selected).toBe(true)
+    expect(selectionState.gatewayOrderEdge.alpha).toBeGreaterThan(0.95)
+    expect(selectionState.unrelatedEdge.selected).toBe(false)
+
+    expect(pageErrors).toEqual([])
+  })
+
   test('emphasizes connected neighbors and edges on hover and selection', async ({ page }) => {
     const pageErrors = await attachPageErrorTracking(page)
     await waitForDevApi(page)
@@ -2772,10 +3265,10 @@ graph TD
     expect(hoverState.hovered!.alpha).toBeGreaterThan(0.95)
     expect(hoverState.upstream!.alpha).toBeGreaterThan(0.95)
     expect(hoverState.downstream!.alpha).toBeGreaterThan(0.95)
-    expect(hoverState.unrelated!.alpha).toBeLessThan(0.5)
+    expect(hoverState.unrelated!.alpha).toBeLessThanOrEqual(0.24)
     expect(hoverState.incomingEdge!.alpha).toBeGreaterThan(0.95)
     expect(hoverState.outgoingEdge!.alpha).toBeGreaterThan(0.95)
-    expect(hoverState.unrelatedEdge!.alpha).toBeLessThan(0.5)
+    expect(hoverState.unrelatedEdge!.alpha).toBeLessThanOrEqual(0.24)
     const canvas = page.locator('#canvas')
     await expect(canvas).toHaveScreenshot('relationship-hover-emphasis.png')
 
@@ -2806,6 +3299,64 @@ graph TD
     expect(selectionState.incomingEdge.alpha).toBeGreaterThan(0.95)
     expect(selectionState.unrelatedEdge.alpha).toBeLessThan(0.5)
     await expect(canvas).toHaveScreenshot('relationship-selection-emphasis.png')
+
+    expect(pageErrors).toEqual([])
+  })
+
+  test('emphasizes edge endpoints when hovering the widened edge hit area', async ({ page }) => {
+    const pageErrors = await attachPageErrorTracking(page)
+    await waitForDevApi(page)
+
+    await page.evaluate(() => window.__MERMAID_DEV__!.setLayout('blueprint'))
+    const loaded = await page.evaluate(async () => {
+      return await window.__MERMAID_DEV__!.loadSource(`flowchart TD
+  A[Source] --> B[Target]
+  B --> C[Next]
+  X[Unrelated] --> Y[Other]
+`)
+    })
+    expect(loaded).toBe(true)
+    await expect.poll(async () => (await snapshot(page)).currentLayout).toBe('blueprint')
+
+    const edge = await page.evaluate(() => {
+      const edges = window.__MERMAID_DEV__!.getRenderedEdgeMetrics() as RenderedEdgeMetrics[]
+      return edges.find((candidate) => candidate.source === 'A' && candidate.target === 'B')!
+    })
+    expect(edge.hitBounds).not.toBeNull()
+    expect(edge.hitPadding).toBeGreaterThanOrEqual(10)
+    expect(edge.hitBounds!.width).toBeGreaterThanOrEqual(edge.bounds.width)
+    expect(edge.hitBounds!.height).toBeGreaterThanOrEqual(edge.bounds.height)
+
+    const canvasBox = await page.locator('#canvas').boundingBox()
+    expect(canvasBox).not.toBeNull()
+    const hoverPoint = {
+      x: canvasBox!.x + edge.screenPoints[0].x + Math.min(10, edge.hitPadding - 2),
+      y: canvasBox!.y + edge.screenPoints[0].y + (edge.screenPoints[1].y - edge.screenPoints[0].y) * 0.5,
+    }
+    await page.mouse.move(hoverPoint.x, hoverPoint.y)
+
+    await expect.poll(async () => {
+      const edges = await page.evaluate(() => window.__MERMAID_DEV__!.getRenderedEdgeMetrics() as RenderedEdgeMetrics[])
+      return edges.find((candidate) => candidate.source === 'A' && candidate.target === 'B')?.hovered ?? false
+    }).toBe(true)
+
+    const hoverState = await page.evaluate(() => {
+      const nodes = window.__MERMAID_DEV__!.getRenderedNodeMetrics() as RenderedNodeMetrics[]
+      const edges = window.__MERMAID_DEV__!.getRenderedEdgeMetrics() as RenderedEdgeMetrics[]
+      return {
+        source: nodes.find((node) => node.id === 'A')!,
+        target: nodes.find((node) => node.id === 'B')!,
+        unrelated: nodes.find((node) => node.id === 'X')!,
+        hoveredEdge: edges.find((edge) => edge.source === 'A' && edge.target === 'B')!,
+        unrelatedEdge: edges.find((edge) => edge.source === 'X' && edge.target === 'Y')!,
+      }
+    })
+
+    expect(hoverState.source.alpha).toBeGreaterThan(0.95)
+    expect(hoverState.target.alpha).toBeGreaterThan(0.95)
+    expect(hoverState.unrelated.alpha).toBeLessThanOrEqual(0.24)
+    expect(hoverState.hoveredEdge.alpha).toBeGreaterThan(0.95)
+    expect(hoverState.unrelatedEdge.alpha).toBeLessThanOrEqual(0.24)
 
     expect(pageErrors).toEqual([])
   })
@@ -3586,12 +4137,13 @@ graph TD
     const pageErrors = await attachPageErrorTracking(page)
     await waitForDevApi(page)
 
+    // `pie` has no adapter; sequenceDiagram/stateDiagram/etc. are supported now,
+    // so this probe has to use a family the graph builder still rejects.
     const success = await page.evaluate(async () => {
-      return await window.__MERMAID_DEV__!.loadSource(`classDiagram
-        Animal <|-- Dog
-        class Animal
-        class Dog
-      `, '/__unsupported-class-diagram__.mmd')
+      return await window.__MERMAID_DEV__!.loadSource(`pie title Pets
+        "Dogs" : 386
+        "Cats" : 85
+      `, '/__unsupported-pie-diagram__.mmd')
     })
 
     expect(success).toBeFalsy()
@@ -3600,7 +4152,7 @@ graph TD
     const overlay = await page.evaluate(() => window.__MERMAID_DEV__!.getOverlayState() as OverlayState)
     expect(overlay.visible).toBeTruthy()
     expect(overlay.text).toContain('Unsupported Mermaid diagram type')
-    expect(overlay.text).toContain('flowchart only')
+    expect(overlay.text).toContain('flowchart, erDiagram, classDiagram, stateDiagram')
 
     const state = await snapshot(page)
     expect(state.statusMessage).toContain('Unsupported Mermaid diagram type')

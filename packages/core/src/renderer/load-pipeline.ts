@@ -11,13 +11,26 @@ import { buildGraph } from '../parser/graph-builder'
 import { DagreLayout } from '../layout/dagre-layout'
 import { BlueprintLayout } from '../layout/blueprint-layout'
 import { NarrativeLayout } from '../layout/narrative-layout'
+import { SequenceLayout } from '../layout/sequence-layout'
 import type { LayoutEngine } from '../layout/layout-engine'
 
 const VERIFIED_INTERACTIVE_NODE_FLOOR = 220
 const VERIFIED_INTERACTIVE_EDGE_FLOOR = 294
 
-/** Factory: select the right layout engine for the given philosophy */
-export function createLayoutEngine(philosophy: string): LayoutEngine {
+/**
+ * Factory: select the right layout engine for the given philosophy.
+ *
+ * Sequence diagrams are not a generic directed graph (see sequence-layout.ts)
+ * — regardless of the chosen visual philosophy, they always get the
+ * dedicated swimlane engine when the graph being laid out is passed in.
+ */
+export function createLayoutEngine(
+  philosophy: string,
+  graph?: Pick<RenderGraph, 'diagramType'>,
+): LayoutEngine {
+  if (graph?.diagramType === 'sequenceDiagram') {
+    return new SequenceLayout({ philosophy: philosophy as any })
+  }
   switch (philosophy) {
     case 'narrative': return new NarrativeLayout()
     case 'blueprint': return new BlueprintLayout()
@@ -67,7 +80,7 @@ export class LoadPipeline {
     const philosophy = (options?.layout ?? layoutDir?.philosophy ?? 'narrative') as any
 
     // Layout
-    const layout = createLayoutEngine(philosophy)
+    const layout = createLayoutEngine(philosophy, result.graph)
     const positioned = layout.compute(result.graph)
     const warnings = [...(result.warnings ?? [])]
 

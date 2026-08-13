@@ -6,21 +6,84 @@ import type { Theme } from './theme'
 import type { WireSegment } from './wire-crossings'
 import type { WireSegment as RouterWireSegment } from '../router/types'
 import type { WireRegistry } from './wire-registry'
+import { estimateRenderedNodeFootprint } from '../node-footprint'
+import { computeSelfLoopGeometry } from './self-loop-geometry'
 
 const DIMMED_ALPHA = 0.12
 const ARROW_SIZE = 8
+const EDGE_HIT_PADDING = 14
+
+type Rect = { x: number; y: number; width: number; height: number }
+type Point = { x: number; y: number }
+
+type ResolvedEdgeStyle = {
+  color: number
+  labelColor: number
+  width: number
+  alpha: number
+  dashPattern?: number[]
+}
+
+type ErCardinality = 'ONLY_ONE' | 'ZERO_OR_ONE' | 'ONE_OR_MORE' | 'ZERO_OR_MORE'
+
+class PolylineHitArea {
+  constructor(
+    private readonly points: Array<{ x: number; y: number }>,
+    private readonly padding: number,
+  ) {}
+
+  contains(x: number, y: number): boolean {
+    for (let index = 0; index < this.points.length - 1; index++) {
+      const start = this.points[index]
+      const end = this.points[index + 1]
+      if (distanceToSegment(x, y, start.x, start.y, end.x, end.y) <= this.padding) {
+        return true
+      }
+    }
+    return false
+  }
+}
+
+function distanceToSegment(
+  px: number,
+  py: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): number {
+  const dx = x2 - x1
+  const dy = y2 - y1
+  const lengthSquared = dx * dx + dy * dy
+  if (lengthSquared <= 1e-6) return Math.hypot(px - x1, py - y1)
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared))
+  const projectionX = x1 + t * dx
+  const projectionY = y1 + t * dy
+  return Math.hypot(px - projectionX, py - projectionY)
+}
 
 export class EdgeGraphic extends Graphics {
   data: PositionedEdge
   private _labelText: BitmapText | null = null
+  private _labelPlate: Graphics | null = null
   private _theme: Theme
+  private _strokeColor: number
   private _stressMode = false
+  private _hovered = false
+  private _selected = false
+  private _hitBounds: Rect | null = null
+  private _hitPadding = EDGE_HIT_PADDING
+  private _anchorPoint: Point | null = null
   private _labelFontFamily: string | null = null
   private _arrowDebug: {
     tip: { x: number; y: number }
     wingA: { x: number; y: number }
     wingB: { x: number; y: number }
     angle: number
+  } | null = null
+  private _erCardinalityDebug: {
+    source: string | null
+    target: string | null
   } | null = null
   /** Orthogonal wire segments (set by Blueprint mode, read by wire-hop detector) */
   orthogonalSegments?: WireSegment[]
@@ -32,6 +95,7 @@ export class EdgeGraphic extends Graphics {
   constructor(edge: PositionedEdge, theme: Theme, allNodes?: Map<string, PositionedNode>, philosophy?: string, edgeIndex = 0, totalEdges = 1, allSubgraphs?: Map<string, { x: number; y: number; width: number; height: number }> | undefined, wireRegistry?: WireRegistry, reversePairOffset = 0) {
     super()
     this._theme = theme
+    this._strokeColor = theme.edgeColor
     this.data = edge
     this.redraw(edge, theme, allNodes, philosophy, edgeIndex, totalEdges, allSubgraphs, wireRegistry, reversePairOffset)
   }
@@ -51,10 +115,21 @@ export class EdgeGraphic extends Graphics {
     this.clear()
     this.removeChildren()
     this._labelText = null
+    this._labelPlate = null
     this._labelFontFamily = null
     this._arrowDebug = null
+    this._erCardinalityDebug = null
+    this._hovered = false
+    this._selected = false
+    this._hitBounds = null
+    this._anchorPoint = null
+    this.hitArea = null
+    this.eventMode = 'none'
+    this.interactive = false
+    this.cursor = 'default'
     this.orthogonalSegments = undefined
     this._theme = theme
+    this._strokeColor = this._resolveEdgeStyle(edge, theme).color
 
     // Self-loops are rendered as explicit loop shapes for non-blueprint modes.
     if (edge.source === edge.target) {
@@ -106,8 +181,9 @@ export class EdgeGraphic extends Graphics {
     for (const [id, node] of allNodes) {
       if (id === edge.source || id === edge.target) continue
 
-      const hw = node.width / 2
-      const hh = node.height / 2
+      const footprint = estimateRenderedNodeFootprint(node, false)
+      const hw = footprint.width / 2
+      const hh = footprint.height / 2
 
       if (lineIntersectsRect(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, node.x, node.y, hw, hh)) {
         const waypoint = computeWaypoint(
@@ -153,8 +229,9 @@ export class EdgeGraphic extends Graphics {
     const dy = toward.y - node.y
     if (dx === 0 && dy === 0) return { x: node.x, y: node.y }
 
-    const hw = node.width / 2
-    const hh = node.height / 2
+    const footprint = estimateRenderedNodeFootprint(node, false)
+    const hw = footprint.width / 2
+    const hh = footprint.height / 2
 
     if (node.shape === 'circle') {
       const radius = Math.max(hw, hh)
@@ -237,37 +314,33 @@ export class EdgeGraphic extends Graphics {
    */
   drawFromSegments(segments: RouterWireSegment[], theme: Theme): void {
     if (segments.length === 0) return
-    const color = theme.edgeColor
+    const edgeStyle = this._resolveEdgeStyle(this.data, theme)
+    const color = edgeStyle.color
+    this._strokeColor = color
 
-    this.moveTo(segments[0].x1, segments[0].y1)
+    const points = [{ x: segments[0].x1, y: segments[0].y1 }]
     for (const seg of segments) {
-      this.lineTo(seg.x2, seg.y2)
+      points.push({ x: seg.x2, y: seg.y2 })
     }
-    this.stroke({ width: 1.5, color })
+    this._anchorPoint = this._pathMidpoint(points)
+    this._strokePolyline(points, edgeStyle)
+    this._setEdgeHitPath(points)
 
     // Record for hop detection
     this.orthogonalSegments = segments as WireSegment[]
 
-    // Arrow at final segment end
-    const last = segments[segments.length - 1]
-    this._drawArrow([{ x: last.x1, y: last.y1 }, { x: last.x2, y: last.y2 }], color)
+    if (!this._drawErEndpointMarkers(points, edgeStyle)) {
+      // Arrow at final segment end
+      const last = segments[segments.length - 1]
+      this._drawArrow([{ x: last.x1, y: last.y1 }, { x: last.x2, y: last.y2 }], edgeStyle)
+    }
 
     // Label at midpoint
     if (this.data.label && segments.length > 0) {
       const midSeg = segments[Math.floor(segments.length / 2)]
       const mx = (midSeg.x1 + midSeg.x2) / 2
       const my = (midSeg.y1 + midSeg.y2) / 2
-      ensureFontsInstalled()
-      this._labelText = new BitmapText({
-        text: this.data.label,
-        style: { fontFamily: 'MermaidBlueprint', fontSize: 10, fill: theme.edgeLabelColor },
-      })
-      this._labelFontFamily = 'MermaidBlueprint'
-      this._labelText.anchor.set(0.5)
-      this._labelText.x = mx
-      this._labelText.y = my - 12
-      this._labelText.visible = !this._stressMode
-      this.addChild(this._labelText)
+      this._addLabel(this.data.label, 'MermaidBlueprint', 10, edgeStyle.labelColor, mx, my - 12, true, color)
     }
   }
 
@@ -275,9 +348,40 @@ export class EdgeGraphic extends Graphics {
     this.alpha = on ? DIMMED_ALPHA : 1
   }
 
+  setHovered(hovered: boolean): void {
+    this._hovered = hovered
+  }
+
+  isHovered(): boolean {
+    return this._hovered
+  }
+
+  setSelected(selected: boolean): void {
+    this._selected = selected
+  }
+
+  isSelected(): boolean {
+    return this._selected
+  }
+
+  getHitBounds(): Rect | null {
+    return this._hitBounds ? { ...this._hitBounds } : null
+  }
+
+  getHitPadding(): number {
+    return this._hitPadding
+  }
+
+  getAnchorPoint(): Point | null {
+    if (!this._anchorPoint) return null
+    const point = this.toGlobal(this._anchorPoint)
+    return { x: point.x, y: point.y }
+  }
+
   setStressMode(stressMode: boolean): void {
     this._stressMode = stressMode
     if (this._labelText) this._labelText.visible = !stressMode
+    if (this._labelPlate) this._labelPlate.visible = !stressMode
   }
 
   getLabelBounds(): { x: number; y: number; width: number; height: number } | null {
@@ -296,20 +400,26 @@ export class EdgeGraphic extends Graphics {
     labelFill: number | null
     labelVisible: boolean
     labelFontFamily: string | null
+    selected: boolean
     arrowTip: { x: number; y: number } | null
     arrowWingA: { x: number; y: number } | null
     arrowWingB: { x: number; y: number } | null
     arrowAngle: number | null
+    erSourceCardinality: string | null
+    erTargetCardinality: string | null
   } {
     return {
-      strokeColor: this._theme.edgeColor,
+      strokeColor: this._strokeColor,
       labelFill: this._labelText ? (this._labelText.style.fill as number | undefined) ?? null : null,
       labelVisible: this._labelText?.visible ?? false,
       labelFontFamily: this._labelFontFamily,
+      selected: this._selected,
       arrowTip: this._arrowDebug?.tip ?? null,
       arrowWingA: this._arrowDebug?.wingA ?? null,
       arrowWingB: this._arrowDebug?.wingB ?? null,
       arrowAngle: this._arrowDebug?.angle ?? null,
+      erSourceCardinality: this._erCardinalityDebug?.source ?? null,
+      erTargetCardinality: this._erCardinalityDebug?.target ?? null,
     }
   }
 
@@ -317,8 +427,12 @@ export class EdgeGraphic extends Graphics {
     const points = edge.points
     if (points.length < 2) return
 
-    const { width: lineWidth, dash } = this._styleParams(edge.style)
-    const color = theme.edgeColor
+    const edgeStyle = this._resolveEdgeStyle(edge, theme)
+    this._strokeColor = edgeStyle.color
+    const hitPoints = points.length === 2 && reversePairOffset !== 0
+      ? [points[0], this._reversePairControlPoint(points[0], points[1], reversePairOffset), points[1]]
+      : points
+    this._anchorPoint = this._pathMidpoint(hitPoints)
 
     this.moveTo(points[0].x, points[0].y)
 
@@ -344,26 +458,55 @@ export class EdgeGraphic extends Graphics {
       }
     }
 
-    this.stroke({ width: lineWidth, color, alpha: dash ? 0.5 : 1 })
-    this._drawArrow(points, color)
+    this.stroke({ width: edgeStyle.width, color: edgeStyle.color, alpha: edgeStyle.alpha })
+    this._setEdgeHitPath(hitPoints)
+    if (!this._drawErEndpointMarkers(points, edgeStyle)) {
+      this._drawArrow(points, edgeStyle)
+    }
 
     if (edge.label) {
       const mid = this._labelPlacement(points, reversePairOffset)
-      ensureFontsInstalled()
-      this._labelText = new BitmapText({
-        text: edge.label,
-        style: { fontFamily: 'MermaidEdge', fontSize: 11, fill: theme.edgeLabelColor },
-      })
-      this._labelFontFamily = 'MermaidEdge'
-      this._labelText.anchor.set(0.5)
-      this._labelText.x = mid.x
-      this._labelText.y = mid.y
-      this._labelText.visible = !this._stressMode
-      this.addChild(this._labelText)
+      this._addLabel(edge.label, 'MermaidEdge', 11, edgeStyle.labelColor, mid.x, mid.y, false)
     }
   }
 
-  private _drawArrow(points: Array<{ x: number; y: number }>, color: number): void {
+  private _addLabel(
+    text: string,
+    fontFamily: string,
+    fontSize: number,
+    fill: number,
+    x: number,
+    y: number,
+    withPlate: boolean,
+    plateStrokeColor: number = this._theme.edgeColor,
+  ): void {
+    ensureFontsInstalled()
+    this._labelText = new BitmapText({
+      text,
+      style: { fontFamily, fontSize, fill },
+    })
+    this._labelFontFamily = fontFamily
+    this._labelText.anchor.set(0.5)
+    this._labelText.x = x
+    this._labelText.y = y
+    this._labelText.visible = !this._stressMode
+
+    if (withPlate) {
+      const plateWidth = this._labelText.width + 14
+      const plateHeight = this._labelText.height + 6
+      this._labelPlate = new Graphics()
+      this._labelPlate
+        .roundRect(x - plateWidth / 2, y - plateHeight / 2, plateWidth, plateHeight, 4)
+        .fill({ color: this._theme.background, alpha: 0.78 })
+        .stroke({ width: 1, color: plateStrokeColor, alpha: 0.5 })
+      this._labelPlate.visible = !this._stressMode
+      this.addChild(this._labelPlate)
+    }
+
+    this.addChild(this._labelText)
+  }
+
+  private _drawArrow(points: Array<{ x: number; y: number }>, edgeStyle: ResolvedEdgeStyle): void {
     const last = points[points.length - 1]
     const prev = points[points.length - 2]
     const angle = Math.atan2(last.y - prev.y, last.x - prev.x)
@@ -386,15 +529,176 @@ export class EdgeGraphic extends Graphics {
     this.lineTo(wingA.x, wingA.y)
     this.moveTo(last.x, last.y)
     this.lineTo(wingB.x, wingB.y)
-    this.stroke({ width: 2, color })
+    this.stroke({ width: Math.max(1.8, edgeStyle.width), color: edgeStyle.color, alpha: edgeStyle.alpha })
   }
 
-  private _styleParams(style: EdgeStyle): { width: number; dash: boolean } {
-    switch (style) {
-      case 'dotted': return { width: 1.5, dash: true }
-      case 'thick': return { width: 3, dash: false }
-      default: return { width: 1.5, dash: false }
+  private _drawErEndpointMarkers(points: Array<{ x: number; y: number }>, edgeStyle: ResolvedEdgeStyle): boolean {
+    const cardinalities = this._erCardinalities()
+    if (!cardinalities || points.length < 2) return false
+
+    this._erCardinalityDebug = {
+      source: cardinalities.source,
+      target: cardinalities.target,
     }
+
+    this._drawErCardinalityMarker(points[0], points[1], cardinalities.source, edgeStyle)
+    this._drawErCardinalityMarker(points[points.length - 1], points[points.length - 2], cardinalities.target, edgeStyle)
+    return true
+  }
+
+  private _erCardinalities(): { source: ErCardinality; target: ErCardinality } | null {
+    const metadata = this.data.metadata
+    if (!metadata || metadata.diagramFamily !== 'er') return null
+    const er = metadata.er as Record<string, unknown> | undefined
+    const source = this._erCardinality(er?.sourceCardinality)
+    const target = this._erCardinality(er?.targetCardinality)
+    return source && target ? { source, target } : null
+  }
+
+  private _erCardinality(value: unknown): ErCardinality | null {
+    switch (value) {
+      case 'ONLY_ONE':
+      case 'ZERO_OR_ONE':
+      case 'ONE_OR_MORE':
+      case 'ZERO_OR_MORE':
+        return value
+      default:
+        return null
+    }
+  }
+
+  private _drawErCardinalityMarker(
+    endpoint: { x: number; y: number },
+    inwardPoint: { x: number; y: number },
+    cardinality: ErCardinality,
+    edgeStyle: ResolvedEdgeStyle,
+  ): void {
+    const dx = inwardPoint.x - endpoint.x
+    const dy = inwardPoint.y - endpoint.y
+    const length = Math.hypot(dx, dy) || 1
+    const ux = dx / length
+    const uy = dy / length
+    const px = -uy
+    const py = ux
+    const alpha = Math.min(1, edgeStyle.alpha + 0.12)
+    const lineWidth = Math.max(1.8, edgeStyle.width)
+
+    const pointAt = (distance: number, side = 0) => ({
+      x: endpoint.x + ux * distance + px * side,
+      y: endpoint.y + uy * distance + py * side,
+    })
+
+    const drawBar = (distance: number) => {
+      const a = pointAt(distance, -6)
+      const b = pointAt(distance, 6)
+      this.moveTo(a.x, a.y)
+      this.lineTo(b.x, b.y)
+      this.stroke({ width: lineWidth, color: edgeStyle.color, alpha })
+    }
+
+    const drawCircle = (distance: number) => {
+      const center = pointAt(distance)
+      this.circle(center.x, center.y, 4.2)
+      this.stroke({ width: lineWidth, color: edgeStyle.color, alpha })
+    }
+
+    const drawCrowFoot = (baseDistance: number, tipDistance: number) => {
+      const base = pointAt(baseDistance)
+      for (const side of [-7, 0, 7]) {
+        const tip = pointAt(tipDistance, side)
+        this.moveTo(base.x, base.y)
+        this.lineTo(tip.x, tip.y)
+      }
+      this.stroke({ width: lineWidth, color: edgeStyle.color, alpha })
+    }
+
+    switch (cardinality) {
+      case 'ONLY_ONE':
+        drawBar(9)
+        break
+      case 'ZERO_OR_ONE':
+        drawCircle(7)
+        drawBar(17)
+        break
+      case 'ONE_OR_MORE':
+        drawBar(7)
+        drawCrowFoot(12, 22)
+        break
+      case 'ZERO_OR_MORE':
+        drawCircle(7)
+        drawCrowFoot(15, 25)
+        break
+    }
+  }
+
+  private _resolveEdgeStyle(edge: PositionedEdge, theme: Theme): ResolvedEdgeStyle {
+    const params = this._styleParams(edge.style)
+    return {
+      color: edge.renderStyle?.stroke ?? theme.edgeColor,
+      labelColor: edge.renderStyle?.text ?? theme.edgeLabelColor,
+      width: edge.renderStyle?.strokeWidth ?? params.width,
+      alpha: params.alpha,
+      dashPattern: edge.renderStyle?.strokeDasharray ?? params.dashPattern,
+    }
+  }
+
+  private _styleParams(style: EdgeStyle): { width: number; alpha: number; dashPattern?: number[] } {
+    switch (style) {
+      case 'dotted': return { width: 1.5, alpha: 0.82, dashPattern: [4, 6] }
+      case 'thick': return { width: 3, alpha: 1 }
+      default: return { width: 1.5, alpha: 1 }
+    }
+  }
+
+  private _strokePolyline(points: Array<{ x: number; y: number }>, edgeStyle: ResolvedEdgeStyle): void {
+    if (points.length < 2) return
+
+    if (!edgeStyle.dashPattern) {
+      this.moveTo(points[0].x, points[0].y)
+      for (let index = 1; index < points.length; index++) {
+        this.lineTo(points[index].x, points[index].y)
+      }
+      this.stroke({ width: edgeStyle.width, color: edgeStyle.color, alpha: edgeStyle.alpha })
+      return
+    }
+
+    const pattern = edgeStyle.dashPattern
+    let patternIndex = 0
+    let drawDash = true
+    let remaining = pattern[0] ?? 1
+
+    for (let index = 0; index < points.length - 1; index++) {
+      const start = points[index]
+      const end = points[index + 1]
+      const dx = end.x - start.x
+      const dy = end.y - start.y
+      const length = Math.hypot(dx, dy)
+      if (length <= 1e-6) continue
+
+      let travelled = 0
+      while (travelled < length) {
+        const step = Math.min(remaining, length - travelled)
+        const fromRatio = travelled / length
+        const toRatio = (travelled + step) / length
+        const from = { x: start.x + dx * fromRatio, y: start.y + dy * fromRatio }
+        const to = { x: start.x + dx * toRatio, y: start.y + dy * toRatio }
+
+        if (drawDash) {
+          this.moveTo(from.x, from.y)
+          this.lineTo(to.x, to.y)
+        }
+
+        travelled += step
+        remaining -= step
+        if (remaining <= 1e-6) {
+          patternIndex = (patternIndex + 1) % pattern.length
+          remaining = pattern[patternIndex] ?? 1
+          drawDash = !drawDash
+        }
+      }
+    }
+
+    this.stroke({ width: edgeStyle.width, color: edgeStyle.color, alpha: edgeStyle.alpha })
   }
 
   private _reversePairControlPoint(
@@ -483,35 +787,29 @@ export class EdgeGraphic extends Graphics {
   }
 
   private _drawSelfLoop(edge: PositionedEdge, node: PositionedNode, theme: Theme): void {
-    const { width: lineWidth, dash } = this._styleParams(edge.style)
-    const color = theme.edgeColor
-    const hw = node.width / 2
-    const hh = node.height / 2
-    const loopWidth = Math.max(34, hw * 0.9)
-    const loopHeight = Math.max(26, hh * 0.9)
-
-    const start = { x: node.x + hw * 0.55, y: node.y - hh * 0.25 }
-    const cp1 = { x: node.x + hw + loopWidth, y: node.y - hh - loopHeight * 0.2 }
-    const cp2 = { x: node.x + hw + loopWidth, y: node.y + hh + loopHeight * 0.1 }
-    const end = { x: node.x + hw * 0.18, y: node.y + hh * 0.1 }
+    const edgeStyle = this._resolveEdgeStyle(edge, theme)
+    const color = edgeStyle.color
+    this._strokeColor = color
+    const footprint = estimateRenderedNodeFootprint(node, false)
+    const { start, cp1, cp2, end, labelPosition } = computeSelfLoopGeometry(node, footprint, edge.label)
 
     this.moveTo(start.x, start.y)
     this.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, end.x, end.y)
-    this.stroke({ width: lineWidth, color, alpha: dash ? 0.5 : 1 })
-    this._drawArrow([cp2, end], color)
+    this.stroke({ width: edgeStyle.width, color, alpha: edgeStyle.alpha })
+    this._anchorPoint = this._pathMidpoint([start, cp1, cp2, end])
+    this._setEdgeHitPath([start, cp1, cp2, end])
+    this._drawArrow([cp2, end], edgeStyle)
 
     if (edge.label) {
-      ensureFontsInstalled()
-      this._labelText = new BitmapText({
-        text: edge.label,
-        style: { fontFamily: 'MermaidEdge', fontSize: 11, fill: theme.edgeLabelColor },
-      })
-      this._labelFontFamily = 'MermaidEdge'
-      this._labelText.anchor.set(0.5)
-      this._labelText.x = node.x + hw + loopWidth * 0.55
-      this._labelText.y = node.y - hh - loopHeight * 0.15
-      this._labelText.visible = !this._stressMode
-      this.addChild(this._labelText)
+      this._addLabel(
+        edge.label,
+        'MermaidEdge',
+        11,
+        edgeStyle.labelColor,
+        labelPosition.x,
+        labelPosition.y,
+        false,
+      )
     }
   }
 
@@ -531,14 +829,18 @@ export class EdgeGraphic extends Graphics {
 
     const src = points[0]
     const tgt = points[points.length - 1]
-    const color = theme.edgeColor
+    const edgeStyle = this._resolveEdgeStyle(edge, theme)
+    const color = edgeStyle.color
+    this._strokeColor = color
     const gridSize = (theme as any).gridSize ?? 20
 
     // Port-based attachment: exit from bottom of source, enter top of target
     const srcNode = allNodes?.get(edge.source)
     const tgtNode = allNodes?.get(edge.target)
-    const srcPort = { x: src.x, y: srcNode ? srcNode.y + srcNode.height / 2 : src.y }
-    const tgtPort = { x: tgt.x, y: tgtNode ? tgtNode.y - tgtNode.height / 2 : tgt.y }
+    const srcFootprint = srcNode ? estimateRenderedNodeFootprint(srcNode, true) : null
+    const tgtFootprint = tgtNode ? estimateRenderedNodeFootprint(tgtNode, true) : null
+    const srcPort = { x: src.x, y: srcNode && srcFootprint ? srcNode.y + srcFootprint.height / 2 : src.y }
+    const tgtPort = { x: tgt.x, y: tgtNode && tgtFootprint ? tgtNode.y - tgtFootprint.height / 2 : tgt.y }
 
     // Find a horizontal channel Y that doesn't pass through any node
     const baseMidY = (srcPort.y + tgtPort.y) / 2
@@ -559,8 +861,9 @@ export class EdgeGraphic extends Graphics {
           let blocked = false
           for (const [id, node] of allNodes) {
             if (id === edge.source || id === edge.target) continue
-            const hw = node.width / 2 + 4
-            const hh = node.height / 2 + 4
+            const footprint = estimateRenderedNodeFootprint(node, true)
+            const hw = footprint.width / 2 + 4
+            const hh = footprint.height / 2 + 4
             if (midY >= node.y - hh && midY <= node.y + hh &&
                 maxX >= node.x - hw && minX <= node.x + hw) {
               blocked = true
@@ -599,8 +902,9 @@ export class EdgeGraphic extends Graphics {
       if (allNodes) {
         for (const [id, node] of allNodes) {
           if (id === edge.source || id === edge.target) continue
-          const hw = node.width / 2 + 6
-          const hh = node.height / 2 + 6
+          const footprint = estimateRenderedNodeFootprint(node, true)
+          const hw = footprint.width / 2 + 6
+          const hh = footprint.height / 2 + 6
           const minSegY = Math.min(srcPort.y, midY)
           const maxSegY = Math.max(srcPort.y, midY)
           if (srcExitX >= node.x - hw && srcExitX <= node.x + hw &&
@@ -611,8 +915,9 @@ export class EdgeGraphic extends Graphics {
         }
         for (const [id, node] of allNodes) {
           if (id === edge.source || id === edge.target) continue
-          const hw = node.width / 2 + 6
-          const hh = node.height / 2 + 6
+          const footprint = estimateRenderedNodeFootprint(node, true)
+          const hw = footprint.width / 2 + 6
+          const hh = footprint.height / 2 + 6
           const minSegY = Math.min(midY, tgtPort.y)
           const maxSegY = Math.max(midY, tgtPort.y)
           if (tgtEntryX >= node.x - hw && tgtEntryX <= node.x + hw &&
@@ -625,21 +930,23 @@ export class EdgeGraphic extends Graphics {
     }
 
     // Route with potentially offset vertical segments
-    this.moveTo(srcPort.x, srcPort.y)
+    const routePoints: Array<{ x: number; y: number }> = [srcPort]
     if (srcExitX !== srcPort.x) {
       // Jog horizontally to clear, then go vertical
-      this.lineTo(srcExitX, srcPort.y)
+      routePoints.push({ x: srcExitX, y: srcPort.y })
     }
-    this.lineTo(srcExitX, midY)
-    this.lineTo(tgtEntryX, midY)
+    routePoints.push({ x: srcExitX, y: midY })
+    routePoints.push({ x: tgtEntryX, y: midY })
     if (tgtEntryX !== tgtPort.x) {
-      this.lineTo(tgtEntryX, tgtPort.y)
-      this.lineTo(tgtPort.x, tgtPort.y)
+      routePoints.push({ x: tgtEntryX, y: tgtPort.y })
+      routePoints.push(tgtPort)
     } else {
-      this.lineTo(tgtPort.x, tgtPort.y)
+      routePoints.push(tgtPort)
     }
 
-    this.stroke({ width: 1.5, color })
+    this._strokePolyline(routePoints, edgeStyle)
+    this._anchorPoint = this._pathMidpoint(routePoints)
+    this._setEdgeHitPath(routePoints)
 
     // Claim all segments in registry so future edges avoid them
     if (wireRegistry) {
@@ -668,23 +975,15 @@ export class EdgeGraphic extends Graphics {
       this.orthogonalSegments.push({ x1: tgtEntryX, y1: tgtPort.y, x2: tgtPort.x, y2: tgtPort.y, isHorizontal: true, edgeId: edge.id })
     }
 
-    // Arrow pointing into target
-    this._drawArrow([{ x: tgtEntryX, y: midY }, tgtPort], color)
+    if (!this._drawErEndpointMarkers(routePoints, edgeStyle)) {
+      // Arrow pointing into target
+      this._drawArrow([{ x: tgtEntryX, y: midY }, tgtPort], edgeStyle)
+    }
 
     // Label at the horizontal segment midpoint
     if (edge.label) {
       const labelX = (srcPort.x + tgtPort.x) / 2
-      ensureFontsInstalled()
-      this._labelText = new BitmapText({
-        text: edge.label,
-        style: { fontFamily: 'MermaidBlueprint', fontSize: 10, fill: theme.edgeLabelColor },
-      })
-      this._labelFontFamily = 'MermaidBlueprint'
-      this._labelText.anchor.set(0.5)
-      this._labelText.x = labelX
-      this._labelText.y = midY - 12
-      this._labelText.visible = !this._stressMode
-      this.addChild(this._labelText)
+      this._addLabel(edge.label, 'MermaidBlueprint', 10, edgeStyle.labelColor, labelX, midY - 12, true, color)
     }
   }
 
@@ -696,7 +995,9 @@ export class EdgeGraphic extends Graphics {
     const points = edge.points
     if (points.length < 2) return
 
-    const color = theme.edgeColor
+    const edgeStyle = this._resolveEdgeStyle(edge, theme)
+    const color = edgeStyle.color
+    this._strokeColor = color
 
     this.moveTo(points[0].x, points[0].y)
     if (points.length === 2) {
@@ -713,6 +1014,8 @@ export class EdgeGraphic extends Graphics {
 
     // Whisper: thin, low opacity
     this.stroke({ width: 1, color, alpha: 0.25 })
+    this._anchorPoint = this._pathMidpoint(points)
+    this._setEdgeHitPath(points)
 
     // Small subtle arrow
     const last = points[points.length - 1]
@@ -726,5 +1029,77 @@ export class EdgeGraphic extends Graphics {
     this.stroke({ width: 0.8, color, alpha: 0.25 })
 
     // No label for whisper lines (shown on hover only — future feature)
+  }
+
+  private _setEdgeHitPath(points: Array<{ x: number; y: number }>): void {
+    const hitPoints = points.filter((point, index) => (
+      index === 0
+      || Math.hypot(point.x - points[index - 1].x, point.y - points[index - 1].y) > 1e-6
+    ))
+    if (hitPoints.length < 2) return
+
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const point of hitPoints) {
+      minX = Math.min(minX, point.x)
+      minY = Math.min(minY, point.y)
+      maxX = Math.max(maxX, point.x)
+      maxY = Math.max(maxY, point.y)
+    }
+
+    const padding = this._hitPadding
+    this._hitBounds = {
+      x: minX - padding,
+      y: minY - padding,
+      width: maxX - minX + padding * 2,
+      height: maxY - minY + padding * 2,
+    }
+    this.hitArea = new PolylineHitArea(hitPoints, padding)
+    this.eventMode = 'static'
+    this.interactive = true
+    this.cursor = 'pointer'
+  }
+
+  private _pathMidpoint(points: Point[]): Point | null {
+    const path = points.filter((point, index) => (
+      index === 0
+      || Math.hypot(point.x - points[index - 1].x, point.y - points[index - 1].y) > 1e-6
+    ))
+    if (path.length === 0) return null
+    if (path.length === 1) return { ...path[0] }
+
+    let totalLength = 0
+    const lengths: number[] = []
+    for (let index = 0; index < path.length - 1; index++) {
+      const start = path[index]
+      const end = path[index + 1]
+      const length = Math.hypot(end.x - start.x, end.y - start.y)
+      lengths.push(length)
+      totalLength += length
+    }
+
+    if (totalLength <= 1e-6) return { ...path[Math.floor(path.length / 2)] }
+
+    const target = totalLength / 2
+    let traversed = 0
+    for (let index = 0; index < lengths.length; index++) {
+      const length = lengths[index]
+      if (traversed + length < target) {
+        traversed += length
+        continue
+      }
+
+      const start = path[index]
+      const end = path[index + 1]
+      const ratio = length > 1e-6 ? (target - traversed) / length : 0.5
+      return {
+        x: start.x + (end.x - start.x) * ratio,
+        y: start.y + (end.y - start.y) * ratio,
+      }
+    }
+
+    return { ...path[path.length - 1] }
   }
 }

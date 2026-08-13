@@ -1,6 +1,35 @@
 import { describe, it, expect } from 'vitest'
 import { OccupancyGrid } from '../occupancy-grid'
 import { manhattanRoute, pathToSegments } from '../manhattan-router'
+import type { GridCell } from '../types'
+
+function shortestStepCount(grid: OccupancyGrid, src: GridCell, tgt: GridCell): number | null {
+  const key = (cell: GridCell) => `${cell.gx},${cell.gy}`
+  const queue: Array<GridCell & { distance: number }> = [{ ...src, distance: 0 }]
+  const seen = new Set([key(src)])
+  const dirs = [
+    { dx: 0, dy: -1 },
+    { dx: 0, dy: 1 },
+    { dx: -1, dy: 0 },
+    { dx: 1, dy: 0 },
+  ]
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index]
+    if (current.gx === tgt.gx && current.gy === tgt.gy) return current.distance
+
+    for (const { dx, dy } of dirs) {
+      const next = { gx: current.gx + dx, gy: current.gy + dy }
+      const nextKey = key(next)
+      const isTarget = next.gx === tgt.gx && next.gy === tgt.gy
+      if (seen.has(nextKey) || (!isTarget && !grid.isFreeCell(next.gx, next.gy))) continue
+      seen.add(nextKey)
+      queue.push({ ...next, distance: current.distance + 1 })
+    }
+  }
+
+  return null
+}
 
 describe('manhattanRoute', () => {
   it('finds straight vertical path', () => {
@@ -48,6 +77,51 @@ describe('manhattanRoute', () => {
       if (dirIn !== dirOut) bends++
     }
     expect(bends).toBeLessThanOrEqual(2) // at most 2 bends for a diagonal target
+  })
+
+  it('prefers the clearer shortest corridor when alternatives have equal length', () => {
+    const grid = new OccupancyGrid(0, 0, 220, 160, 20)
+    grid.markPath([
+      { gx: 5, gy: 3 },
+      { gx: 5, gy: 4 },
+      { gx: 5, gy: 5 },
+      { gx: 4, gy: 1 },
+      { gx: 5, gy: 1 },
+      { gx: 6, gy: 1 },
+    ])
+
+    const path = manhattanRoute(grid, { gx: 2, gy: 4 }, { gx: 8, gy: 4 })
+
+    expect(path).not.toBeNull()
+    expect(path!.some((cell) => cell.gy <= 2)).toBe(false)
+    expect(path!.some((cell) => cell.gy >= 6)).toBe(true)
+  })
+
+  it('uses the shortest unobstructed Manhattan path before a longer lower-bend detour', () => {
+    const grid = new OccupancyGrid(0, 0, 120, 120, 20)
+    const src = { gx: 0, gy: 3 }
+    const tgt = { gx: 6, gy: 3 }
+    grid.markPath([
+      { gx: 0, gy: 1 },
+      { gx: 1, gy: 0 },
+      { gx: 1, gy: 3 },
+      { gx: 2, gy: 0 },
+      { gx: 2, gy: 2 },
+      { gx: 2, gy: 3 },
+      { gx: 2, gy: 4 },
+      { gx: 2, gy: 5 },
+      { gx: 4, gy: 0 },
+      { gx: 5, gy: 1 },
+      { gx: 6, gy: 0 },
+      { gx: 6, gy: 6 },
+    ])
+
+    const shortest = shortestStepCount(grid, src, tgt)
+    const path = manhattanRoute(grid, src, tgt)
+
+    expect(shortest, 'fixture should have a 10-step unobstructed Manhattan route').toBe(10)
+    expect(path).not.toBeNull()
+    expect(path!.length - 1).toBe(shortest)
   })
 })
 

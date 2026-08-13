@@ -1,4 +1,4 @@
-# Contributing to mermaid-render
+# Contributing to mermaid-monkey
 
 Thanks for your interest in contributing!
 

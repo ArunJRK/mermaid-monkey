@@ -278,7 +278,7 @@ export class LinkPreview {
   }
 
   private _renderMini(graph: RenderGraph, theme: Theme, philosophy: string): void {
-    const layout = createLayoutEngine(philosophy)
+    const layout = createLayoutEngine(philosophy, graph)
     const positioned = layout.compute(graph)
     const fontName = philosophy === 'blueprint' ? 'MermaidBlueprint' : 'MermaidNode'
 

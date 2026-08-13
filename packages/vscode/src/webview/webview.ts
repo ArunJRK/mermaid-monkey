@@ -1,4 +1,4 @@
-import { MermaidRenderer } from '@mermaid-render/core'
+import { MermaidRenderer } from '@mermaid-monkey/core'
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: any): void

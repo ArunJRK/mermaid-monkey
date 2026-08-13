@@ -1,3 +1,5 @@
+import type { RichLabel } from './label-markup'
+
 // ─── Primitive type aliases ──────────────────────────────────────────────────
 
 export type NodeShape =
@@ -19,9 +21,15 @@ export type ThemeMode = 'system' | 'dark' | 'light'
 
 export type DiagramType =
   | 'flowchart'
+  | 'erDiagram'
   | 'classDiagram'
   | 'c4'
   | 'stateDiagram'
+  | 'sequenceDiagram'
+  | 'requirementDiagram'
+  | 'mindmap'
+  | 'gantt'
+  | 'journey'
   | 'unknown'
 
 // ─── Graph model ─────────────────────────────────────────────────────────────
@@ -29,8 +37,11 @@ export type DiagramType =
 export interface RenderNode {
   id: string
   label: string
+  labelMarkup?: RichLabel
   shape: NodeShape
   metadata: Record<string, unknown>
+  classes?: string[]
+  style?: RenderStyle
 }
 
 export interface RenderEdge {
@@ -39,6 +50,8 @@ export interface RenderEdge {
   target: string
   style: EdgeStyle
   label?: string
+  metadata?: Record<string, unknown>
+  renderStyle?: RenderStyle
 }
 
 export interface RenderSubgraph {
@@ -46,6 +59,9 @@ export interface RenderSubgraph {
   label: string
   nodeIds: string[]
   collapsed: boolean
+  direction?: string
+  classes?: string[]
+  style?: RenderStyle
 }
 
 export interface RenderGraph {
@@ -55,6 +71,42 @@ export interface RenderGraph {
   directives: Directive[]
   direction: string
   diagramType: DiagramType
+}
+
+export interface RenderedNodeAnchor {
+  id: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface RenderedEdgeAnchor {
+  id: string
+  source: string
+  target: string
+  x: number
+  y: number
+}
+
+export interface RenderedSubitemAnchor {
+  id: string
+  parentKind: 'node' | 'edge'
+  parentId: string
+  itemKind: string
+  label: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface RenderStyle {
+  fill?: number
+  stroke?: number
+  text?: number
+  strokeWidth?: number
+  strokeDasharray?: number[]
 }
 
 // ─── Cross-file linking ──────────────────────────────────────────────────────
@@ -90,6 +142,35 @@ export interface LinkState {
   warningCode?: string
 }
 
+export type DirectiveMetadataValue = string | boolean | string[]
+export type DirectiveMetadata = Record<string, DirectiveMetadataValue>
+
+export interface EntityDirective {
+  type: 'entity'
+  nodeId: string
+  entityType: string
+  entityId: string
+  metadata: DirectiveMetadata
+}
+
+export interface EdgeDirective {
+  type: 'edge'
+  source: string
+  target: string
+  metadata: DirectiveMetadata
+}
+
+export interface FileDirective {
+  type: 'file'
+  metadata: DirectiveMetadata
+}
+
+export interface LensDirective {
+  type: 'lens'
+  name: string
+  metadata: DirectiveMetadata
+}
+
 export interface LayoutDirective {
   type: 'layout'
   philosophy: LayoutPhilosophy
@@ -116,10 +197,70 @@ export interface SpacingDirective {
 
 export type Directive =
   | LinkDirective
+  | EntityDirective
+  | EdgeDirective
+  | FileDirective
+  | LensDirective
   | LayoutDirective
   | PinDirective
   | RankDirective
   | SpacingDirective
+
+// ─── Project index ──────────────────────────────────────────────────────────
+
+export interface ProjectNodeOccurrence {
+  file: string
+  nodeId: string
+  label: string
+  entityKey?: string
+  metadata: Record<string, unknown>
+}
+
+export interface ProjectEdgeOccurrence {
+  file: string
+  edgeId: string
+  source: string
+  target: string
+  label?: string
+  metadata: Record<string, unknown>
+}
+
+export interface ProjectLinkOccurrence {
+  file: string
+  nodeId: string
+  rawTargetFile: string
+  targetNode?: string
+  canonicalTargetFile?: string
+  status: 'valid' | 'broken' | 'unvalidated'
+  reason?: string
+  warningCode?: string
+}
+
+export interface ProjectFileIndex {
+  file: string
+  success: boolean
+  graph?: RenderGraph
+  warnings: ProjectIndexWarning[]
+  errors: ProjectIndexError[]
+}
+
+export interface ProjectIndexWarning extends RenderWarning {
+  file: string
+}
+
+export interface ProjectIndexError extends RenderError {
+  file: string
+}
+
+export interface ProjectIndex {
+  files: Map<string, ProjectFileIndex>
+  nodesById: Map<string, ProjectNodeOccurrence[]>
+  entities: Map<string, ProjectNodeOccurrence[]>
+  edgesBySignature: Map<string, ProjectEdgeOccurrence[]>
+  links: ProjectLinkOccurrence[]
+  warnings: ProjectIndexWarning[]
+  errors: ProjectIndexError[]
+}
 
 // ─── Positioned (layout output) ─────────────────────────────────────────────
 
@@ -206,6 +347,7 @@ export interface ThemeOverrides {
   strokeWidth?: number
   cornerRadius?: number
   dimmedAlpha?: number
+  hoverDimmedAlpha?: number
   messageOverlayBg?: number
   messageTitle?: string
   messageBody?: string
@@ -219,10 +361,39 @@ export interface MermaidRendererOptions {
   themeOverrides?: ThemeOverrides
 }
 
+export interface MermaidViewportState {
+  x: number
+  y: number
+  zoom: number
+}
+
+export type MermaidViewSpec =
+  | { kind: 'full' }
+  | { kind: 'subgraph'; id: string; boundaryDepth?: 1 }
+  | { kind: 'lens'; name: string | null }
+
 // ─── Interaction events ──────────────────────────────────────────────────────
 
 export interface NodeEvent {
   nodeId: string
   eventType: 'click' | 'hover' | 'dblclick' | 'contextmenu'
+  originalEvent?: Event
+}
+
+export interface EdgeEvent {
+  edgeId: string
+  source: string
+  target: string
+  eventType: 'click' | 'hover' | 'contextmenu'
+  originalEvent?: Event
+}
+
+export interface SubitemEvent {
+  id: string
+  parentKind: 'node' | 'edge'
+  parentId: string
+  itemKind: string
+  label: string
+  eventType: 'click' | 'hover' | 'contextmenu'
   originalEvent?: Event
 }

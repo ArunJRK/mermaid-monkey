@@ -1,6 +1,6 @@
 import type { PositionedGraph, PositionedNode, PositionedEdge } from '../types'
-import type { RoutedWire, RouteResult, WireSegment } from './types'
-import { GRID_SIZE } from './types'
+import type { RouteDiagnostic, RoutedWire, RouteResult, WireSegment } from './types'
+import { COMPONENT_CLEARANCE, GRID_SIZE } from './types'
 import { OccupancyGrid } from './occupancy-grid'
 import { manhattanRoute, pathToSegments } from './manhattan-router'
 import { estimateRenderedNodeFootprint } from '../node-footprint'
@@ -10,6 +10,7 @@ export class BlueprintWireBuilder {
   private _grid!: OccupancyGrid
   private _g: number
   private _usedFallbackRoute = false
+  private _fallbackEdgeIds = new Set<string>()
 
   constructor(graph: PositionedGraph, gridSize: number = GRID_SIZE) {
     this._graph = graph
@@ -19,6 +20,7 @@ export class BlueprintWireBuilder {
   route(): RouteResult {
     const wires: RoutedWire[] = []
     this._usedFallbackRoute = false
+    this._fallbackEdgeIds.clear()
     this._buildGrid()
     const orderedEdges = [...this._graph.edges]
       .sort((left, right) => this._compareEdges(left, right))
@@ -84,7 +86,27 @@ export class BlueprintWireBuilder {
       }
     }
 
-    return { wires, congested: this._usedFallbackRoute }
+    const diagnostics: RouteDiagnostic[] = []
+    for (const edge of orderedEdges) {
+      if (edge.source === edge.target) {
+        diagnostics.push({
+          edgeId: edge.id,
+          source: edge.source,
+          target: edge.target,
+          code: 'SELF_LOOP_SKIPPED',
+          reason: 'Blueprint routing does not render self-loop wires.',
+        })
+      } else if (this._fallbackEdgeIds.has(edge.id)) {
+        diagnostics.push({
+          edgeId: edge.id,
+          source: edge.source,
+          target: edge.target,
+          code: 'FALLBACK_ROUTE',
+          reason: 'No clear orthogonal path was found; a visible fallback route was used.',
+        })
+      }
+    }
+    return { wires, congested: this._usedFallbackRoute, diagnostics }
   }
 
   private _buildGrid(): void {
@@ -106,62 +128,275 @@ export class BlueprintWireBuilder {
     }
   }
 
-  private _exitPort(node: PositionedNode): { x: number; y: number } {
-    return { x: node.x, y: node.y + node.height / 2 }
+  private _exitPort(node: PositionedNode, target?: PositionedNode): { x: number; y: number } {
+    const footprint = estimateRenderedNodeFootprint(node, true)
+    if (target) {
+      const dx = target.x - node.x
+      const dy = target.y - node.y
+      if (this._portAxis(node, target) === 'horizontal') {
+        return { x: node.x + Math.sign(dx) * footprint.width / 2, y: node.y }
+      }
+      if (dy < 0) {
+        return { x: node.x, y: node.y - footprint.height / 2 }
+      }
+    }
+    return { x: node.x, y: node.y + footprint.height / 2 }
   }
 
-  private _entryPort(node: PositionedNode): { x: number; y: number } {
-    return { x: node.x, y: node.y - node.height / 2 }
+  private _entryPort(node: PositionedNode, source?: PositionedNode): { x: number; y: number } {
+    const footprint = estimateRenderedNodeFootprint(node, true)
+    if (source) {
+      const dx = node.x - source.x
+      const dy = node.y - source.y
+      if (this._portAxis(node, source) === 'horizontal') {
+        return { x: node.x - Math.sign(dx) * footprint.width / 2, y: node.y }
+      }
+      if (dy < 0) {
+        return { x: node.x, y: node.y + footprint.height / 2 }
+      }
+    }
+    return { x: node.x, y: node.y - footprint.height / 2 }
   }
 
-  private _routeAstar(fromX: number, fromY: number, toX: number, toY: number, edgeId: string): WireSegment[] | null {
+  private _portAxis(node: PositionedNode, other: PositionedNode): 'horizontal' | 'vertical' {
+    const deltaX = other.x - node.x
+    const deltaY = other.y - node.y
+    if (deltaX === 0) return 'vertical'
+    if (deltaY === 0) return 'horizontal'
+
+    const nodeFootprint = estimateRenderedNodeFootprint(node, true)
+    const otherFootprint = estimateRenderedNodeFootprint(other, true)
+    const horizontalGap = Math.abs(deltaX)
+      - (nodeFootprint.width + otherFootprint.width) / 2
+    const verticalGap = Math.abs(deltaY)
+      - (nodeFootprint.height + otherFootprint.height) / 2
+
+    return horizontalGap > verticalGap ? 'horizontal' : 'vertical'
+  }
+
+  private _routeAstar(
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+    edgeId: string,
+    options?: {
+      reservePath?: boolean
+      sourceNode?: PositionedNode
+      targetNode?: PositionedNode
+    },
+  ): WireSegment[] | null {
+    const targetPort = { x: toX, y: toY }
     const src = this._grid.worldToCell(fromX, fromY)
     const tgt = this._grid.worldToCell(toX, toY)
-
-    // Free source, target, and their immediate neighbors so shared ports work.
-    // Ports are inside node inflation zones — we must carve an exit corridor.
-    for (const cell of [src, tgt]) {
-      this._grid.clearCell(cell.gx, cell.gy)
-      this._grid.clearCell(cell.gx, cell.gy - 1)
-      this._grid.clearCell(cell.gx, cell.gy + 1)
-      this._grid.clearCell(cell.gx - 1, cell.gy)
-      this._grid.clearCell(cell.gx + 1, cell.gy)
+    const clearedCells = new Map<string, { gx: number; gy: number; occupied: boolean }>()
+    const clearTemporarily = (gx: number, gy: number): void => {
+      const key = `${gx},${gy}`
+      if (clearedCells.has(key)) return
+      clearedCells.set(key, {
+        gx,
+        gy,
+        occupied: this._grid.clearCell(gx, gy),
+      })
     }
 
-    const path = manhattanRoute(this._grid, src, tgt)
+    if (options?.sourceNode) {
+      this._clearPortEscape(options.sourceNode, { x: fromX, y: fromY }, clearTemporarily)
+    }
+    if (options?.targetNode) {
+      this._clearPortEscape(options.targetNode, targetPort, clearTemporarily)
+    }
+
+    for (const cell of [src, tgt]) {
+      clearTemporarily(cell.gx, cell.gy)
+      clearTemporarily(cell.gx, cell.gy - 1)
+      clearTemporarily(cell.gx, cell.gy + 1)
+      clearTemporarily(cell.gx - 1, cell.gy)
+      clearTemporarily(cell.gx + 1, cell.gy)
+    }
+
+    let path
+    try {
+      path = manhattanRoute(this._grid, src, tgt)
+    } finally {
+      for (const cell of clearedCells.values()) {
+        this._grid.restoreCell(cell.gx, cell.gy, cell.occupied)
+      }
+    }
     if (!path) return null
 
-    // Mark interior cells only — keep first 2 and last 2 free for shared ports
-    const markStart = Math.min(2, path.length - 1)
-    const markEnd = Math.max(markStart, path.length - 2)
-    for (let i = markStart; i < markEnd; i++) {
-      this._grid.markPath([path[i]])
+    if (options?.reservePath !== false) {
+      // Mark interior cells only — keep first 2 and last 2 free for shared ports
+      const markStart = Math.min(2, path.length - 1)
+      const markEnd = Math.max(markStart, path.length - 2)
+      for (let i = markStart; i < markEnd; i++) {
+        this._grid.markPath([path[i]])
+      }
     }
 
-    return pathToSegments(path, this._grid, edgeId)
+    const segments = pathToSegments(path, this._grid, edgeId)
+    return options?.targetNode
+      ? this._alignTargetApproach(segments, targetPort, options.targetNode, edgeId)
+      : segments
+  }
+
+  private _clearPortEscape(
+    node: PositionedNode,
+    port: { x: number; y: number },
+    clearCell: (gx: number, gy: number) => void,
+  ): void {
+    const footprint = estimateRenderedNodeFootprint(node, true)
+    const portCell = this._grid.worldToCell(port.x, port.y)
+    const isSidePort = Math.abs(port.x - node.x) >= Math.abs(port.y - node.y)
+
+    if (isSidePort) {
+      const min = this._grid.worldToCell(
+        port.x,
+        node.y - footprint.height / 2 - COMPONENT_CLEARANCE,
+      )
+      const max = this._grid.worldToCell(
+        port.x,
+        node.y + footprint.height / 2 + COMPONENT_CLEARANCE,
+      )
+      for (let gy = min.gy; gy <= max.gy; gy++) {
+        clearCell(portCell.gx, gy)
+      }
+      return
+    }
+
+    const min = this._grid.worldToCell(
+      node.x - footprint.width / 2 - COMPONENT_CLEARANCE,
+      port.y,
+    )
+    const max = this._grid.worldToCell(
+      node.x + footprint.width / 2 + COMPONENT_CLEARANCE,
+      port.y,
+    )
+    for (let gx = min.gx; gx <= max.gx; gx++) {
+      clearCell(gx, portCell.gy)
+    }
+  }
+
+  private _portNormal(
+    node: PositionedNode,
+    port: { x: number; y: number },
+  ): { x: number; y: number } {
+    const isSidePort = Math.abs(port.x - node.x) >= Math.abs(port.y - node.y)
+    if (isSidePort) {
+      return { x: Math.sign(port.x - node.x), y: 0 }
+    }
+    return { x: 0, y: Math.sign(port.y - node.y) }
+  }
+
+  private _alignTargetApproach(
+    segments: WireSegment[],
+    targetPort: { x: number; y: number },
+    targetNode: PositionedNode,
+    edgeId: string,
+  ): WireSegment[] {
+    if (segments.length === 0) return segments
+    const last = segments[segments.length - 1]
+    const normal = this._portNormal(targetNode, targetPort)
+    const approach = {
+      x: Math.sign(last.x2 - last.x1),
+      y: Math.sign(last.y2 - last.y1),
+    }
+    if (approach.x === -normal.x && approach.y === -normal.y) return segments
+
+    const stub = {
+      x: targetPort.x + normal.x * this._g,
+      y: targetPort.y + normal.y * this._g,
+    }
+    const start = { x: last.x1, y: last.y1 }
+    const replacement = normal.x !== 0
+      ? [
+          this._segment(start, { x: stub.x, y: start.y }, edgeId),
+          this._segment({ x: stub.x, y: start.y }, stub, edgeId),
+          this._segment(stub, targetPort, edgeId),
+        ]
+      : [
+          this._segment(start, { x: start.x, y: stub.y }, edgeId),
+          this._segment({ x: start.x, y: stub.y }, stub, edgeId),
+          this._segment(stub, targetPort, edgeId),
+        ]
+
+    return this._compactSegments([
+      ...segments.slice(0, -1),
+      ...replacement,
+    ])
+  }
+
+  private _compactSegments(segments: WireSegment[]): WireSegment[] {
+    const merged: WireSegment[] = []
+    for (const segment of segments) {
+      if (segment.x1 === segment.x2 && segment.y1 === segment.y2) continue
+      const previous = merged[merged.length - 1]
+      const contiguous = previous
+        && previous.x2 === segment.x1
+        && previous.y2 === segment.y1
+      if (contiguous && previous.isHorizontal === segment.isHorizontal) {
+        previous.x2 = segment.x2
+        previous.y2 = segment.y2
+      } else {
+        merged.push(segment)
+      }
+    }
+    return merged
+  }
+
+  private _segment(
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+    edgeId: string,
+  ): WireSegment {
+    return {
+      x1: start.x,
+      y1: start.y,
+      x2: end.x,
+      y2: end.y,
+      isHorizontal: start.y === end.y,
+      edgeId,
+    }
   }
 
   private _routeDirect(edge: PositionedEdge): RoutedWire | null {
     const srcNode = this._graph.nodes.get(edge.source)
     const tgtNode = this._graph.nodes.get(edge.target)
     if (!srcNode || !tgtNode) return null
-    const src = this._exitPort(srcNode)
-    const tgt = this._entryPort(tgtNode)
-    const segments = this._routeAstar(src.x, src.y, tgt.x, tgt.y, edge.id)
-      ?? this._fallbackSegments(src, tgt, edge.id)
+    const src = this._exitPort(srcNode, tgtNode)
+    const tgt = this._entryPort(tgtNode, srcNode)
+    const segments = this._routeAstar(src.x, src.y, tgt.x, tgt.y, edge.id, {
+      sourceNode: srcNode,
+      targetNode: tgtNode,
+    })
+      ?? this._alignTargetApproach(
+        this._fallbackSegments(src, tgt, edge.id),
+        tgt,
+        tgtNode,
+        edge.id,
+      )
     return { edgeId: edge.id, segments, source: edge.source, target: edge.target }
   }
 
   private _routeFanOut(_srcId: string, srcNode: PositionedNode, edges: PositionedEdge[]): RoutedWire[] {
     const wires: RoutedWire[] = []
-    const src = this._exitPort(srcNode)
 
     for (const edge of edges) {
       const tgtNode = this._graph.nodes.get(edge.target)
       if (!tgtNode) continue
-      const tgt = this._entryPort(tgtNode)
-      const segments = this._routeAstar(src.x, src.y, tgt.x, tgt.y, edge.id)
-        ?? this._fallbackSegments(src, tgt, edge.id)
+      const src = this._exitPort(srcNode, tgtNode)
+      const tgt = this._entryPort(tgtNode, srcNode)
+      const segments = this._routeAstar(src.x, src.y, tgt.x, tgt.y, edge.id, {
+        reservePath: false,
+        sourceNode: srcNode,
+        targetNode: tgtNode,
+      })
+        ?? this._alignTargetApproach(
+          this._fallbackSegments(src, tgt, edge.id),
+          tgt,
+          tgtNode,
+          edge.id,
+        )
       wires.push({ edgeId: edge.id, segments, source: edge.source, target: edge.target })
     }
     return wires
@@ -169,14 +404,23 @@ export class BlueprintWireBuilder {
 
   private _routeFanIn(_tgtId: string, tgtNode: PositionedNode, edges: PositionedEdge[]): RoutedWire[] {
     const wires: RoutedWire[] = []
-    const tgt = this._entryPort(tgtNode)
 
     for (const edge of edges) {
       const srcNode = this._graph.nodes.get(edge.source)
       if (!srcNode) continue
-      const src = this._exitPort(srcNode)
-      const segments = this._routeAstar(src.x, src.y, tgt.x, tgt.y, edge.id)
-        ?? this._fallbackSegments(src, tgt, edge.id)
+      const src = this._exitPort(srcNode, tgtNode)
+      const tgt = this._entryPort(tgtNode, srcNode)
+      const segments = this._routeAstar(src.x, src.y, tgt.x, tgt.y, edge.id, {
+        reservePath: false,
+        sourceNode: srcNode,
+        targetNode: tgtNode,
+      })
+        ?? this._alignTargetApproach(
+          this._fallbackSegments(src, tgt, edge.id),
+          tgt,
+          tgtNode,
+          edge.id,
+        )
       wires.push({ edgeId: edge.id, segments, source: edge.source, target: edge.target })
     }
     return wires
@@ -188,6 +432,7 @@ export class BlueprintWireBuilder {
     edgeId: string,
   ): WireSegment[] {
     this._usedFallbackRoute = true
+    this._fallbackEdgeIds.add(edgeId)
     if (src.x === tgt.x || src.y === tgt.y) {
       return [{
         x1: src.x,

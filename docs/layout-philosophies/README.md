@@ -32,7 +32,7 @@ If no philosophy is specified, the renderer currently defaults to `narrative`.
 ## Notes
 
 - `%% @pin` and `%% @rank` are parsed, but they are not yet enforced as visual layout constraints in the renderer.
-- The dedicated v1 layout behavior lives in [packages/core/src/layout](/Volumes/Lake/Projects/ArunJRK/mermaid-render/packages/core/src/layout).
+- The dedicated v1 layout behavior lives in [packages/core/src/layout](/Volumes/Lake/Projects/ArunJRK/mermaid-monkey/packages/core/src/layout).
 - The fallback philosophies remain documented here as design targets, not as fully delivered runtime guarantees.
 - Parser/runtime scope is narrower than the philosophy intent language: current v1 shipping support is `flowchart` syntax only. References to class diagrams, ER diagrams, state diagrams, or C4 here describe future fit, not current parser compatibility.
 - Collision guarantees are philosophy-specific: only `blueprint` promises collision-aware orthogonal routing. The others may still draw through unrelated nodes and should not be described as obstacle-free.

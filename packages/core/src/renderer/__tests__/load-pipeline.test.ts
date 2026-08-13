@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { LoadPipeline } from '../load-pipeline'
+import { computeSelfLoopGeometry } from '../self-loop-geometry'
+import { estimateRenderedNodeFootprint } from '../../node-footprint'
+import { measureTextWidth } from '../../layout/text-measure'
 
 describe('LoadPipeline', () => {
   it('parses mermaid source and produces positioned graph', async () => {
@@ -63,6 +66,69 @@ describe('LoadPipeline', () => {
     // Only second should succeed, first should be cancelled
     expect(secondResult.success).toBe(true)
     expect(secondResult.positioned!.nodes.has('X')).toBe(true)
+  })
+
+  it('lays out a sequenceDiagram in declared actor/message order without overlap (regression: GH #4)', async () => {
+    const pipeline = new LoadPipeline()
+    const source = `sequenceDiagram
+    participant C as Client
+    participant V as Views (BKB)
+    participant P as ProbeRunner
+    C->>V: Publish (Idempotency-Key)
+    alt claim already held
+        V-->>C: 409 publication_in_progress
+    else admitted
+        V->>P: await required Probe terminal results
+        V-->>C: 200 final result
+    end
+`
+    const result = await pipeline.load(source)
+
+    expect(result.success).toBe(true)
+    const positioned = result.positioned!
+    const client = positioned.nodes.get('C')!
+    const views = positioned.nodes.get('V')!
+    const probeRunner = positioned.nodes.get('P')!
+
+    // Actor lanes stay in declared left-to-right order, even though two of
+    // the messages flow "backwards" (V -> C) relative to that order.
+    expect(client.x).toBeLessThan(views.x)
+    expect(views.x).toBeLessThan(probeRunner.x)
+
+    // No two messages collapse onto the same row/line.
+    const rowYs = positioned.edges.map((edge) => edge.points[0].y)
+    expect(new Set(rowYs).size).toBe(rowYs.length)
+  })
+
+  it('keeps a long stateDiagram-v2 self-loop label clear of its own node (regression: GH #4)', async () => {
+    const pipeline = new LoadPipeline()
+    const source = `stateDiagram-v2
+    [*] --> draft : CreateView
+    draft --> published : first successful Publish cutover - INV-VIEW-068
+    draft --> discarded : Discard - releases live RelationName
+    published --> retired : Retire - retains RelationName
+    published --> published : authoring continues, serving unchanged - INV-VIEW-038
+`
+    const result = await pipeline.load(source)
+
+    expect(result.success).toBe(true)
+    const positioned = result.positioned!
+    const published = positioned.nodes.get('published')!
+    const selfLoop = positioned.edges.find((edge) => edge.source === 'published' && edge.target === 'published')
+
+    expect(selfLoop).toBeDefined()
+    expect(selfLoop!.label).toBeTruthy()
+
+    // Reproduce the actual render-time geometry computation against the
+    // real, pipeline-computed node — the label must clear the node's own
+    // boundary, not truncate against it.
+    const footprint = estimateRenderedNodeFootprint(published, false)
+    const geometry = computeSelfLoopGeometry(published, footprint, selfLoop!.label)
+    const labelWidth = measureTextWidth(selfLoop!.label!, 11)
+    const labelLeftEdge = geometry.labelPosition.x - labelWidth / 2
+    const nodeRightEdge = published.x + footprint.width / 2
+
+    expect(labelLeftEdge).toBeGreaterThan(nodeRightEdge)
   })
 
   it('warns when a graph exceeds the verified interactive stress floor', async () => {
