@@ -5,3 +5,4 @@ dist-demo/
 .context/
 test-results/
 playwright-report/
+.pnpm-store/
