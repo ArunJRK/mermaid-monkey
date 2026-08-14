@@ -18,6 +18,16 @@ import {
   computeNodeSemanticSubitems,
   type NodeSemanticSubitem,
 } from '../semantic-subitems'
+import {
+  CALLOUT_BADGE_HIT_RADIUS,
+  type CalloutBadgeSlot,
+  calloutBadgeSlotAtGlobalPoint,
+  type CalloutBadgeState,
+  computeNodeCalloutBadgePosition,
+  rebuildCalloutBadgeSlots,
+  wireCalloutBadgeHoverRouting,
+} from './callout-badge'
+import type { CalloutBadgeKind } from '../types'
 
 const RENDERED_LABEL_PADDING_X = 40
 const RENDERED_LABEL_PADDING_Y = 24
@@ -57,6 +67,8 @@ export class NodeSprite extends Container {
   private _fontName: string
   private _badgeAccent: number | null = null
   private _badgeKind: 'valid' | 'broken' | null = null
+  private _calloutSlots: CalloutBadgeSlot[] = []
+  private _calloutStates: CalloutBadgeState[] = []
 
   constructor(
     node: PositionedNode,
@@ -87,6 +99,16 @@ export class NodeSprite extends Container {
     this.on('pointerout', () => {
       this._hovered = false
       this._hoverGfx.alpha = 0
+    })
+
+    // Badge hover is routed by the HOST (the badge is not a pointer target):
+    // pointer movement over the sprite consults the badge hit test, scales
+    // the badge, and emits callout:hover / callout:hoverend transitions.
+    wireCalloutBadgeHoverRouting(this, {
+      getSlots: () => this._calloutSlots,
+      hitTest: (globalX, globalY) => this.getCalloutBadgeAt(globalX, globalY)?.kind ?? null,
+      onHover: (kind, originalEvent) => this._emitCalloutEvent('callout:hover', kind, originalEvent),
+      onHoverEnd: (kind, originalEvent) => this._emitCalloutEvent('callout:hoverend', kind, originalEvent),
     })
   }
 
@@ -206,6 +228,10 @@ export class NodeSprite extends Container {
       this.addChild(this._linkBadge)
     }
 
+    // Annotation markers — rebuilt from stored state so they survive every
+    // internal rebuild (theme, relayout appearance updates, selection).
+    this._syncCalloutBadges()
+
     // Hover/selection overlays stay above labels and badges.
     this._hoverGfx = new Graphics()
     this._hoverGfx.alpha = 0
@@ -217,12 +243,22 @@ export class NodeSprite extends Container {
     this.addChild(this._selectionGfx)
     this._drawSelectionRing(node.shape, this._displayWidth + 10, this._displayHeight + 10)
 
-    // Hit area
+    // Hit area — the shape rect, extended with each marker's circle so the
+    // badge sliver that pokes past the corner stays clickable (the host must
+    // receive the event for badge routing to run).
     this.hitArea = {
       contains: (x: number, y: number) => {
         const hw = this._displayWidth / 2 + 4
         const hh = this._displayHeight / 2 + 4
-        return x >= -hw && x <= hw && y >= -hh && y <= hh
+        if (x >= -hw && x <= hw && y >= -hh && y <= hh) return true
+        for (const slot of this._calloutSlots) {
+          const dx = x - slot.badge.x
+          const dy = y - slot.badge.y
+          if (dx * dx + dy * dy <= CALLOUT_BADGE_HIT_RADIUS * CALLOUT_BADGE_HIT_RADIUS) {
+            return true
+          }
+        }
+        return false
       },
     }
 
@@ -580,6 +616,100 @@ export class NodeSprite extends Container {
     g.stroke({ width: 1.5 * scale, color: fill })
   }
 
+  /**
+   * Attach this node's annotation markers (empty array detaches them all).
+   * At most one marker per kind; callout keeps the corner slot, a comment
+   * pin sits in the next slot left of it.
+   *
+   * Each marker is a child of the sprite, positioned at the shape's
+   * top-right corner in LOCAL coordinates, so pan/zoom/relayout correctness
+   * is inherited from the display tree rather than recomputed. State is
+   * stored so `_rebuildVisuals` can re-create the markers after any rebuild.
+   */
+  setCalloutBadges(states: CalloutBadgeState[]): void {
+    this._calloutStates = states.map((state) => ({ ...state }))
+    this._syncCalloutBadges()
+  }
+
+  hasCalloutBadge(kind?: CalloutBadgeKind): boolean {
+    if (kind === undefined) return this._calloutSlots.length > 0
+    return this._calloutSlots.some((slot) => slot.state.kind === kind)
+  }
+
+  /**
+   * Global-coordinate marker hit test, consulted by the renderer's own
+   * `pointertap` handler (and this sprite's hover routing) BEFORE any
+   * node-level behaviour — same idiom as `getSemanticSubitemAt`. Returns the
+   * hit marker's state (including its kind) so the caller can route to the
+   * right event.
+   */
+  getCalloutBadgeAt(globalX: number, globalY: number): CalloutBadgeState | null {
+    return calloutBadgeSlotAtGlobalPoint(this, this._calloutSlots, globalX, globalY)
+      ?.state ?? null
+  }
+
+  /** Emit a marker's `callout:click` (host-routed tap; see module doc). */
+  dispatchCalloutTap(kind: CalloutBadgeKind, originalEvent?: Event): void {
+    this._emitCalloutEvent('callout:click', kind, originalEvent)
+  }
+
+  getCalloutBadgeDebug(
+    kind: CalloutBadgeKind = 'callout',
+  ): { x: number; y: number; count?: number } | null {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    if (!slot) return null
+    return {
+      x: slot.badge.x,
+      y: slot.badge.y,
+      ...(slot.state.count !== undefined ? { count: slot.state.count } : {}),
+    }
+  }
+
+  /** Current marker scale (hover feedback), for tests/debug. */
+  getCalloutBadgeHoverScale(kind: CalloutBadgeKind = 'callout'): number | null {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    return slot ? slot.badge.scale.x : null
+  }
+
+  private _syncCalloutBadges(): void {
+    const nodeStyle = this._resolveNodeStyle(this.data, this._theme)
+    this._calloutSlots = rebuildCalloutBadgeSlots(this._calloutSlots, this._calloutStates, {
+      accents: this._theme,
+      surface: nodeStyle.fill,
+      fontName: this._fontName === 'MermaidBlueprint' ? 'MermaidBlueprint' : 'MermaidLabel',
+      positionFor: (slotIndex) => computeNodeCalloutBadgePosition(
+        this._displayWidth,
+        this._displayHeight,
+        this._linkState !== false,
+        slotIndex,
+      ),
+      addChild: (badge) => {
+        // Keep hover/selection overlays above the badge when attached.
+        if (this._hoverGfx && this._hoverGfx.parent === this) {
+          this.addChildAt(badge, this.getChildIndex(this._hoverGfx))
+        } else {
+          this.addChild(badge)
+        }
+      },
+    })
+  }
+
+  private _emitCalloutEvent(
+    event: string,
+    kind: CalloutBadgeKind,
+    originalEvent?: Event,
+  ): void {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    if (!slot) return
+    const global = slot.badge.getGlobalPosition()
+    this.emit(event as 'callout:click', {
+      kind,
+      x: global.x,
+      y: global.y,
+      originalEvent,
+    })
+  }
+
   setSelected(selected: boolean): void {
     if (this._selected === selected) return
     this._selected = selected
@@ -636,7 +766,13 @@ export class NodeSprite extends Container {
     const clampedScreenSize = Math.max(minScreenPx, Math.min(maxScreenPx, screenSize))
     const finalWorldSize = clampedScreenSize / Math.max(absoluteZoom, 0.05)
 
-    this._setLabelFontSize(finalWorldSize)
+    // Never exceed the base size: `_rebuildVisuals` sizes the shape to
+    // contain the label at the base font (goal.md items 14–15), so any
+    // larger world font can spill outside the shape. Clamping the font —
+    // rather than growing the shape to chase it — keeps node geometry
+    // stable through a zoom gesture: hit areas, hover/selection rings,
+    // badges, and the layout footprint all derive from the shape size.
+    this._setLabelFontSize(Math.min(baseFontSize, finalWorldSize))
   }
 
   private _setLabelFontSize(fontSize: number): void {

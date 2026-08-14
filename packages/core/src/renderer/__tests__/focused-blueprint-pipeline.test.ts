@@ -46,6 +46,7 @@ vi.mock('../edge-graphic', () => ({
     on() {}
     setHovered() {}
     setSelected() {}
+    setCalloutBadges() {}
   },
 }))
 
@@ -66,6 +67,7 @@ vi.mock('../node-sprite', () => ({
     getSemanticSubitemAt() {
       return null
     }
+    setCalloutBadges() {}
   },
 }))
 

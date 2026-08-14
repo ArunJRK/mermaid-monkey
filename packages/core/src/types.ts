@@ -344,6 +344,7 @@ export interface ThemeOverrides {
   hoverGlow?: number
   hoverGlowAlpha?: number
   accent?: number
+  commentAccent?: number
   strokeWidth?: number
   cornerRadius?: number
   dimmedAlpha?: number
@@ -395,5 +396,53 @@ export interface SubitemEvent {
   itemKind: string
   label: string
   eventType: 'click' | 'hover' | 'contextmenu'
+  originalEvent?: Event
+}
+
+// ─── Callout badges ──────────────────────────────────────────────────────────
+
+export type CalloutAnchorKind = 'node' | 'subgraph' | 'edge'
+
+/**
+ * What an annotation marker represents. Both kinds share one mechanism (a
+ * badge child of the anchor's sprite, host-routed hit testing, the same
+ * `callout:*` events); the kind selects the accent colour and lets an anchor
+ * carry one marker of EACH kind side by side without overlap.
+ *
+ * - `'callout'` — a callout/annotation card attached to the anchor.
+ * - `'comment'` — a Figma-style comment thread pin on the anchor.
+ */
+export type CalloutBadgeKind = 'callout' | 'comment'
+
+/**
+ * One in-canvas annotation marker, keyed by the anchor (and kind) it belongs
+ * to. Pushed via `MermaidRenderer.setCalloutBadges` and rendered by the
+ * engine as a child of the anchor's sprite so it moves/scales with its
+ * anchor by construction.
+ */
+export interface CalloutBadgeSpec {
+  anchorKind: CalloutAnchorKind
+  anchorId: string
+  /** Marker kind; omitted means `'callout'` (backwards compatible). */
+  kind?: CalloutBadgeKind
+  /** Optional annotation count shown inside the badge when greater than 1. */
+  count?: number
+}
+
+/**
+ * Payload for `callout:click` / `callout:hover` / `callout:hoverend`.
+ * `x`/`y` are the badge centre in canvas-relative screen coordinates at the
+ * moment of the event — the same space as `getNodeAnchors` rects — so hosts
+ * can open a DOM detail panel at the badge without tracking it continuously.
+ * `kind` discriminates which marker on the anchor the event refers to.
+ */
+export interface CalloutBadgeEvent {
+  anchorKind: CalloutAnchorKind
+  anchorId: string
+  kind: CalloutBadgeKind
+  count?: number
+  eventType: 'click' | 'hover' | 'hoverend'
+  x: number
+  y: number
   originalEvent?: Event
 }

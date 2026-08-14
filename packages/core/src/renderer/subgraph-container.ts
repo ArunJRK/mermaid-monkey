@@ -3,6 +3,15 @@ import type { PositionedSubgraph } from '../types'
 import { ensureFontsInstalled } from './fonts'
 import { getSubgraphDepthFill, type Theme } from './theme'
 import { measureTextWidth } from '../layout/text-measure'
+import {
+  type CalloutBadgeSlot,
+  calloutBadgeSlotAtGlobalPoint,
+  type CalloutBadgeState,
+  computeSubgraphCalloutBadgePosition,
+  rebuildCalloutBadgeSlots,
+  wireCalloutBadgeHoverRouting,
+} from './callout-badge'
+import type { CalloutBadgeKind } from '../types'
 
 const LABEL_PADDING = 10
 const HEADER_HEIGHT = 28
@@ -18,6 +27,8 @@ export class SubgraphContainer extends Container {
   private _label: BitmapText
   private _chevron: BitmapText
   private _badge: BitmapText | null = null
+  private _calloutSlots: CalloutBadgeSlot[] = []
+  private _calloutStates: CalloutBadgeState[] = []
   private _theme: Theme
   private _depth: number
   private _collapsed: boolean
@@ -99,6 +110,16 @@ export class SubgraphContainer extends Container {
       this._bg.clear()
       this._drawBg(hw, hh, false)
     })
+
+    // Badge hover is routed by the HOST (the badge is not a pointer target):
+    // pointer movement over the container consults the badge hit test, scales
+    // the badge, and emits callout:hover / callout:hoverend transitions.
+    wireCalloutBadgeHoverRouting(this, {
+      getSlots: () => this._calloutSlots,
+      hitTest: (globalX, globalY) => this.getCalloutBadgeAt(globalX, globalY)?.kind ?? null,
+      onHover: (kind, originalEvent) => this._emitCalloutEvent('callout:hover', kind, originalEvent),
+      onHoverEnd: (kind, originalEvent) => this._emitCalloutEvent('callout:hoverend', kind, originalEvent),
+    })
   }
 
   updateLayout(subgraph: PositionedSubgraph, depth: number = this._depth, theme: Theme = this._theme, fontName: string = this._fontName): void {
@@ -160,6 +181,93 @@ export class SubgraphContainer extends Container {
         return inOuter && !inInner
       },
     }
+
+    // Reposition the annotation markers for the new dimensions/theme.
+    this._syncCalloutBadges()
+  }
+
+  /**
+   * Attach this subgraph's annotation markers (empty array detaches them
+   * all). At most one marker per kind; slots step left of the node-count
+   * pill so a callout badge and a comment pin never overlap.
+   *
+   * Each marker is a child of the container, positioned in the header band
+   * at the top-right in LOCAL coordinates, so it tracks pan/zoom/relayout
+   * via the display tree.
+   */
+  setCalloutBadges(states: CalloutBadgeState[]): void {
+    this._calloutStates = states.map((state) => ({ ...state }))
+    this._syncCalloutBadges()
+  }
+
+  hasCalloutBadge(kind?: CalloutBadgeKind): boolean {
+    if (kind === undefined) return this._calloutSlots.length > 0
+    return this._calloutSlots.some((slot) => slot.state.kind === kind)
+  }
+
+  /**
+   * Global-coordinate marker hit test, consulted by the renderer's own
+   * `pointertap` handler (and this container's hover routing) BEFORE any
+   * fold/focus behaviour — same idiom as `NodeSprite.getSemanticSubitemAt`.
+   */
+  getCalloutBadgeAt(globalX: number, globalY: number): CalloutBadgeState | null {
+    return calloutBadgeSlotAtGlobalPoint(this, this._calloutSlots, globalX, globalY)
+      ?.state ?? null
+  }
+
+  /** Emit a marker's `callout:click` (host-routed tap; see callout-badge doc). */
+  dispatchCalloutTap(kind: CalloutBadgeKind, originalEvent?: Event): void {
+    this._emitCalloutEvent('callout:click', kind, originalEvent)
+  }
+
+  getCalloutBadgeDebug(
+    kind: CalloutBadgeKind = 'callout',
+  ): { x: number; y: number; count?: number } | null {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    if (!slot) return null
+    return {
+      x: slot.badge.x,
+      y: slot.badge.y,
+      ...(slot.state.count !== undefined ? { count: slot.state.count } : {}),
+    }
+  }
+
+  /** Current marker scale (hover feedback), for tests/debug. */
+  getCalloutBadgeHoverScale(kind: CalloutBadgeKind = 'callout'): number | null {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    return slot ? slot.badge.scale.x : null
+  }
+
+  private _syncCalloutBadges(): void {
+    const nodeCount = this.data.nodeIds.length
+    this._calloutSlots = rebuildCalloutBadgeSlots(this._calloutSlots, this._calloutStates, {
+      accents: this._theme,
+      surface: this._theme.background,
+      fontName: this._fontName === 'MermaidBlueprint' ? 'MermaidBlueprint' : 'MermaidLabel',
+      positionFor: (slotIndex) => computeSubgraphCalloutBadgePosition(
+        this.data.width,
+        this.data.height,
+        nodeCount > 0 ? this._badgeWidth(nodeCount) : 0,
+        slotIndex,
+      ),
+      addChild: (badge) => this.addChild(badge),
+    })
+  }
+
+  private _emitCalloutEvent(
+    event: string,
+    kind: CalloutBadgeKind,
+    originalEvent?: Event,
+  ): void {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    if (!slot) return
+    const global = slot.badge.getGlobalPosition()
+    this.emit(event as 'callout:click', {
+      kind,
+      x: global.x,
+      y: global.y,
+      originalEvent,
+    })
   }
 
   /**

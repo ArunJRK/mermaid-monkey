@@ -8,6 +8,16 @@ import type { WireSegment as RouterWireSegment } from '../router/types'
 import type { WireRegistry } from './wire-registry'
 import { estimateRenderedNodeFootprint } from '../node-footprint'
 import { computeSelfLoopGeometry } from './self-loop-geometry'
+import {
+  CALLOUT_BADGE_HIT_RADIUS,
+  type CalloutBadgeSlot,
+  calloutBadgeSlotAtGlobalPoint,
+  type CalloutBadgeState,
+  computeEdgeCalloutBadgePosition,
+  rebuildCalloutBadgeSlots,
+  wireCalloutBadgeHoverRouting,
+} from './callout-badge'
+import type { CalloutBadgeKind } from '../types'
 
 const DIMMED_ALPHA = 0.12
 const ARROW_SIZE = 8
@@ -74,6 +84,8 @@ export class EdgeGraphic extends Graphics {
   private _hitBounds: Rect | null = null
   private _hitPadding = EDGE_HIT_PADDING
   private _anchorPoint: Point | null = null
+  private _calloutSlots: CalloutBadgeSlot[] = []
+  private _calloutStates: CalloutBadgeState[] = []
   private _labelFontFamily: string | null = null
   private _arrowDebug: {
     tip: { x: number; y: number }
@@ -98,6 +110,16 @@ export class EdgeGraphic extends Graphics {
     this._strokeColor = theme.edgeColor
     this.data = edge
     this.redraw(edge, theme, allNodes, philosophy, edgeIndex, totalEdges, allSubgraphs, wireRegistry, reversePairOffset)
+
+    // Badge hover is routed by the HOST (the badge is not a pointer target):
+    // pointer movement over the edge consults the badge hit test, scales the
+    // badge, and emits callout:hover / callout:hoverend transitions.
+    wireCalloutBadgeHoverRouting(this, {
+      getSlots: () => this._calloutSlots,
+      hitTest: (globalX, globalY) => this.getCalloutBadgeAt(globalX, globalY)?.kind ?? null,
+      onHover: (kind, originalEvent) => this._emitCalloutEvent('callout:hover', kind, originalEvent),
+      onHoverEnd: (kind, originalEvent) => this._emitCalloutEvent('callout:hoverend', kind, originalEvent),
+    })
   }
 
   redraw(
@@ -140,6 +162,7 @@ export class EdgeGraphic extends Graphics {
           this._drawSelfLoop(edge, node, theme)
         }
       }
+      this._syncCalloutBadges()
       return
     }
 
@@ -162,6 +185,134 @@ export class EdgeGraphic extends Graphics {
       default:
         this._draw(edge, theme, reversePairOffset)
     }
+
+    // Re-attach the callout badge after `removeChildren()` wiped the previous
+    // one, so it survives every redraw (relayout ticks included).
+    this._syncCalloutBadges()
+  }
+
+  /**
+   * Attach this edge's annotation markers (empty array detaches them all).
+   * At most one marker per kind; additional slots step right along the
+   * lifted line so a callout badge and a comment pin never overlap.
+   *
+   * Each marker is a child of the edge graphic, positioned just above the
+   * path's midpoint in LOCAL coordinates, so it tracks pan/zoom/relayout via
+   * the display tree. State is stored so every redraw re-creates it.
+   */
+  setCalloutBadges(states: CalloutBadgeState[]): void {
+    this._calloutStates = states.map((state) => ({ ...state }))
+    this._syncCalloutBadges()
+  }
+
+  hasCalloutBadge(kind?: CalloutBadgeKind): boolean {
+    if (kind === undefined) return this._calloutSlots.length > 0
+    return this._calloutSlots.some((slot) => slot.state.kind === kind)
+  }
+
+  /**
+   * Global-coordinate marker hit test, consulted by the renderer's own
+   * `pointertap` handler (and this graphic's hover routing) BEFORE the
+   * edge:click behaviour — same idiom as `NodeSprite.getSemanticSubitemAt`.
+   */
+  getCalloutBadgeAt(globalX: number, globalY: number): CalloutBadgeState | null {
+    return calloutBadgeSlotAtGlobalPoint(this, this._calloutSlots, globalX, globalY)
+      ?.state ?? null
+  }
+
+  /** Emit a marker's `callout:click` (host-routed tap; see callout-badge doc). */
+  dispatchCalloutTap(kind: CalloutBadgeKind, originalEvent?: Event): void {
+    this._emitCalloutEvent('callout:click', kind, originalEvent)
+  }
+
+  /** Current marker scale (hover feedback), for tests/debug. */
+  getCalloutBadgeHoverScale(kind: CalloutBadgeKind = 'callout'): number | null {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    return slot ? slot.badge.scale.x : null
+  }
+
+  getCalloutBadgeDebug(
+    kind: CalloutBadgeKind = 'callout',
+  ): { x: number; y: number; count?: number } | null {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    if (!slot) return null
+    return {
+      x: slot.badge.x,
+      y: slot.badge.y,
+      ...(slot.state.count !== undefined ? { count: slot.state.count } : {}),
+    }
+  }
+
+  private _syncCalloutBadges(): void {
+    this._calloutSlots = rebuildCalloutBadgeSlots(
+      this._calloutSlots,
+      this._anchorPoint ? this._calloutStates : [],
+      {
+        accents: this._theme,
+        surface: this._theme.background,
+        fontName: 'MermaidLabel',
+        positionFor: (slotIndex) =>
+          computeEdgeCalloutBadgePosition(this._anchorPoint as Point, slotIndex),
+        addChild: (badge) => this.addChild(badge),
+      },
+    )
+    this._applyCalloutHitArea()
+  }
+
+  /**
+   * The polyline hit area prunes hit-testing for everything outside the wire
+   * corridor — including the marker children. When markers are present,
+   * extend the hit area with each marker's circle so they stay clickable;
+   * when all are removed, restore the plain polyline hit area.
+   */
+  private _applyCalloutHitArea(): void {
+    type HitAreaLike = { contains(x: number, y: number): boolean }
+    type CompositeHitArea = HitAreaLike & { _calloutBase: HitAreaLike | null }
+    const current = this.hitArea as (HitAreaLike & { _calloutBase?: HitAreaLike | null }) | null
+    const base = current && current._calloutBase !== undefined
+      ? current._calloutBase
+      : current
+
+    if (this._calloutSlots.length === 0) {
+      this.hitArea = base
+      return
+    }
+
+    const slots = this._calloutSlots
+    const composite: CompositeHitArea = {
+      _calloutBase: base,
+      contains: (x: number, y: number) => {
+        for (const slot of slots) {
+          const dx = x - slot.badge.x
+          const dy = y - slot.badge.y
+          if (dx * dx + dy * dy <= CALLOUT_BADGE_HIT_RADIUS * CALLOUT_BADGE_HIT_RADIUS) {
+            return true
+          }
+        }
+        return base ? base.contains(x, y) : false
+      },
+    }
+    this.hitArea = composite
+    if (this.eventMode === 'none') {
+      this.eventMode = 'static'
+      this.interactive = true
+    }
+  }
+
+  private _emitCalloutEvent(
+    event: string,
+    kind: CalloutBadgeKind,
+    originalEvent?: Event,
+  ): void {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    if (!slot) return
+    const global = slot.badge.getGlobalPosition()
+    this.emit(event as 'callout:click', {
+      kind,
+      x: global.x,
+      y: global.y,
+      originalEvent,
+    })
   }
 
   /**
@@ -342,6 +493,8 @@ export class EdgeGraphic extends Graphics {
       const my = (midSeg.y1 + midSeg.y2) / 2
       this._addLabel(this.data.label, 'MermaidBlueprint', 10, edgeStyle.labelColor, mx, my - 12, true, color)
     }
+
+    this._syncCalloutBadges()
   }
 
   dim(on: boolean): void {

@@ -24,6 +24,12 @@ export interface Theme {
   hoverGlow: number
   hoverGlowAlpha: number
   accent: number
+  /**
+   * Accent for comment-kind annotation markers (comment pins), deliberately
+   * distinct from `accent` so callout badges and comment pins read
+   * differently at a glance.
+   */
+  commentAccent: number
   strokeWidth: number
   cornerRadius: number
   /** Dimmed opacity for unfocused elements */
@@ -66,6 +72,7 @@ const NARRATIVE: Theme = {
   hoverGlow: 0x58a6ff,
   hoverGlowAlpha: 0.2,
   accent: 0x58a6ff,
+  commentAccent: 0xf59e0b,
   strokeWidth: 2,
   cornerRadius: 8,
   dimmedAlpha: 0.3,
@@ -97,6 +104,7 @@ const NARRATIVE_LIGHT: Theme = {
   hoverGlow: 0x0969da,
   hoverGlowAlpha: 0.16,
   accent: 0x0969da,
+  commentAccent: 0xb45309,
   strokeWidth: 2,
   cornerRadius: 8,
   dimmedAlpha: 0.32,
@@ -129,6 +137,7 @@ const MAP: Theme = {
   hoverGlow: 0xe94560,
   hoverGlowAlpha: 0.25,
   accent: 0xe94560,
+  commentAccent: 0xffa940,
   strokeWidth: 2,
   cornerRadius: 10,
   dimmedAlpha: 0.3,
@@ -164,6 +173,7 @@ const BLUEPRINT: Theme = {
   hoverGlow: 0x00ffcc,
   hoverGlowAlpha: 0.32,
   accent: 0x00ffcc,
+  commentAccent: 0xffb454,
   strokeWidth: 1.5,
   cornerRadius: 4,
   dimmedAlpha: 0.42,
@@ -196,6 +206,7 @@ const BREATH: Theme = {
   hoverGlow: 0xffffff,
   hoverGlowAlpha: 0.15,
   accent: 0xffffff,
+  commentAccent: 0xffb454,
   strokeWidth: 2.5,
   cornerRadius: 16,
   dimmedAlpha: 0.3,
@@ -228,6 +239,7 @@ const RADIAL: Theme = {
   hoverGlow: 0xb07aff,
   hoverGlowAlpha: 0.25,
   accent: 0xb07aff,
+  commentAccent: 0xffb454,
   strokeWidth: 2,
   cornerRadius: 12,
   dimmedAlpha: 0.3,
@@ -260,6 +272,7 @@ const MOSAIC: Theme = {
   hoverGlow: 0xff9f43,
   hoverGlowAlpha: 0.2,
   accent: 0xff9f43,
+  commentAccent: 0x4dabf7,
   strokeWidth: 1.5,
   cornerRadius: 8,
   dimmedAlpha: 0.3,

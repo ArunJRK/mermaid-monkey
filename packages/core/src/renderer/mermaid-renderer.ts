@@ -1,5 +1,9 @@
 import { Application, BitmapText, Container, Graphics } from 'pixi.js'
 import type {
+  CalloutAnchorKind,
+  CalloutBadgeEvent,
+  CalloutBadgeKind,
+  CalloutBadgeSpec,
   LoadResult,
   LoadOptions,
   RenderGraph,
@@ -24,6 +28,7 @@ import { LoadPipeline, createLayoutEngine } from './load-pipeline'
 import { EventEmitter } from './event-emitter'
 import { Viewport } from './viewport'
 import { NodeSprite } from './node-sprite'
+import type { CalloutBadgeState } from './callout-badge'
 import { EdgeGraphic } from './edge-graphic'
 import { SubgraphContainer } from './subgraph-container'
 import { FoldManager } from '../interaction/fold-manager'
@@ -46,6 +51,26 @@ import { lineIntersectsRect } from '../layout/blueprint-layout'
 
 const IDLE_TICKER_TIMEOUT_MS = 220
 const RELAYOUT_MOTION_DURATION_MS = 220
+
+/**
+ * A resize whose viewport area grows or shrinks by at least this factor in a
+ * single settled step is "drastic" (fullscreen toggle, pane reveal) and
+ * refits the diagram; anything smaller is an incidental host layout change
+ * that must preserve the user's pan and zoom.
+ */
+const DRASTIC_RESIZE_AREA_RATIO = 2
+
+function isDrasticCanvasResize(
+  previous: { width: number; height: number } | null,
+  next: { width: number; height: number },
+): boolean {
+  if (!previous) return false
+  if (next.width <= 0 || next.height <= 0) return false
+  const previousArea = previous.width * previous.height
+  if (previousArea <= 0) return true
+  const ratio = (next.width * next.height) / previousArea
+  return ratio >= DRASTIC_RESIZE_AREA_RATIO || ratio <= 1 / DRASTIC_RESIZE_AREA_RATIO
+}
 
 type PerformanceMode = 'normal' | 'stress'
 type SelectionOptions = { additive?: boolean }
@@ -88,6 +113,7 @@ export class MermaidRenderer {
   private _hoveredEdgeId: string | null = null
   private _lenses: LensEvaluation[] = []
   private _activeLensName: string | null = null
+  private _calloutBadges: CalloutBadgeSpec[] = []
 
   // Focus navigation state
   private _focusStack: string[] = []
@@ -108,6 +134,7 @@ export class MermaidRenderer {
   private _resizeRafId: number | null = null
   private _canvasTabIndexAdded = false
   private _lastObservedCanvasSize: { width: number; height: number } | null = null
+  private _lastSettledCanvasSize: { width: number; height: number } | null = null
   private _colorSchemeMediaQuery: MediaQueryList | null = null
   private _colorSchemeChangeHandler: ((event: MediaQueryListEvent) => void) | null = null
   private _idleTickerTimeoutId: number | null = null
@@ -301,6 +328,7 @@ export class MermaidRenderer {
       this._resizeRafId = null
     }
     this._lastObservedCanvasSize = null
+    this._lastSettledCanvasSize = null
     if (this._colorSchemeMediaQuery && this._colorSchemeChangeHandler) {
       this._colorSchemeMediaQuery.removeEventListener('change', this._colorSchemeChangeHandler)
       this._colorSchemeChangeHandler = null
@@ -349,6 +377,7 @@ export class MermaidRenderer {
     this._busGraphics.clear()
     this._busSourceIds.clear()
     this._linkStates.clear()
+    this._calloutBadges = []
     this._focusStack = []
     this._hoveredNodeId = null
     this._hoveredEdgeId = null
@@ -987,6 +1016,173 @@ export class MermaidRenderer {
     )
   }
 
+  /**
+   * Current viewport zoom factor, in the same units the anchor rects returned
+   * by `getNodeAnchors` are already transformed by.
+   *
+   * Hosts that size DOM overlays against those rects need this to keep a
+   * marker proportional to the geometry it is attached to. Returns `1` before
+   * a viewport exists, so callers get an identity scale rather than a null
+   * they have to branch on.
+   */
+  getZoom(): number {
+    return this._viewport?._zoom ?? 1
+  }
+
+  // ── Callout badges ───────────────────────────────────────
+
+  /**
+   * Declare which anchors carry an in-canvas callout badge.
+   *
+   * Badges are rendered by the engine as children of their anchor's sprite
+   * (node, subgraph, or edge), positioned in the sprite's local space, so
+   * they pan/zoom/relayout with the anchor by construction. The set persists
+   * across relayout, philosophy/theme switches, fold/unfold, and focus
+   * navigation: every sprite rebuild re-applies it. Interactions surface as
+   * `callout:click`, `callout:hover`, and `callout:hoverend` events carrying
+   * the anchor kind/id and the badge's screen position.
+   */
+  setCalloutBadges(badges: CalloutBadgeSpec[]): void {
+    this._calloutBadges = badges.map((badge) => ({ ...badge }))
+    this._applyCalloutBadges()
+  }
+
+  /** Remove every callout badge. */
+  clearCalloutBadges(): void {
+    this.setCalloutBadges([])
+  }
+
+  getCalloutBadges(): CalloutBadgeSpec[] {
+    return this._calloutBadges.map((badge) => ({ ...badge }))
+  }
+
+  /** The marker kind a spec declares (omitted means `'callout'`). */
+  private _specKind(spec: CalloutBadgeSpec): CalloutBadgeKind {
+    return spec.kind ?? 'callout'
+  }
+
+  private _stateForSpec(spec: CalloutBadgeSpec): CalloutBadgeState {
+    return {
+      kind: this._specKind(spec),
+      ...(spec.count !== undefined ? { count: spec.count } : {}),
+    }
+  }
+
+  /**
+   * Resolve the badge spec of one kind a node sprite should carry: a direct
+   * node badge, or — when the sprite is the collapsed-subgraph summary node
+   * and the subgraph container itself is not rendered — that subgraph's
+   * badge of the same kind.
+   */
+  private _calloutSpecForNodeSprite(
+    id: string,
+    sprite: NodeSprite,
+    kind: CalloutBadgeKind,
+  ): CalloutBadgeSpec | null {
+    for (const badge of this._calloutBadges) {
+      if (badge.anchorKind === 'node' && badge.anchorId === id
+        && this._specKind(badge) === kind) {
+        return badge
+      }
+    }
+    const metadata = sprite.data.metadata as Record<string, unknown> | undefined
+    if (metadata?._isCollapsedSummary && typeof metadata._subgraphId === 'string'
+      && !this._subgraphContainers.has(metadata._subgraphId)) {
+      for (const badge of this._calloutBadges) {
+        if (badge.anchorKind === 'subgraph' && badge.anchorId === metadata._subgraphId
+          && this._specKind(badge) === kind) {
+          return badge
+        }
+      }
+    }
+    return null
+  }
+
+  /** Every marker state (one per kind, at most) a node sprite should carry. */
+  private _calloutStatesForNodeSprite(id: string, sprite: NodeSprite): CalloutBadgeState[] {
+    const kinds: CalloutBadgeKind[] = ['callout', 'comment']
+    return kinds.flatMap((kind) => {
+      const spec = this._calloutSpecForNodeSprite(id, sprite, kind)
+      return spec ? [this._stateForSpec(spec)] : []
+    })
+  }
+
+  private _applyCalloutBadges(): void {
+    for (const [id, sprite] of this._nodeSprites) {
+      sprite.setCalloutBadges(this._calloutStatesForNodeSprite(id, sprite))
+    }
+    for (const [id, container] of this._subgraphContainers) {
+      container.setCalloutBadges(
+        this._calloutBadges
+          .filter((badge) => badge.anchorKind === 'subgraph' && badge.anchorId === id)
+          .map((badge) => this._stateForSpec(badge)),
+      )
+    }
+    for (const edgeGraphic of this._edgeGraphics) {
+      edgeGraphic.setCalloutBadges(
+        this._calloutBadges
+          .filter((badge) => badge.anchorKind === 'edge' && badge.anchorId === edgeGraphic.data.id)
+          .map((badge) => this._stateForSpec(badge)),
+      )
+    }
+  }
+
+  private _emitCalloutBadgeEvent(
+    eventType: CalloutBadgeEvent['eventType'],
+    anchorKind: CalloutAnchorKind,
+    anchorId: string,
+    kind: CalloutBadgeKind,
+    payload: { x?: number; y?: number; originalEvent?: Event } | undefined,
+  ): void {
+    const spec = this._calloutBadges.find(
+      (badge) => badge.anchorKind === anchorKind && badge.anchorId === anchorId
+        && this._specKind(badge) === kind,
+    )
+    const event: CalloutBadgeEvent = {
+      anchorKind,
+      anchorId,
+      kind,
+      ...(spec?.count !== undefined ? { count: spec.count } : {}),
+      eventType,
+      x: payload?.x ?? 0,
+      y: payload?.y ?? 0,
+      ...(payload?.originalEvent ? { originalEvent: payload.originalEvent } : {}),
+    }
+    const name = eventType === 'click'
+      ? 'callout:click'
+      : eventType === 'hover'
+        ? 'callout:hover'
+        : 'callout:hoverend'
+    this._emitter.emit(name, event)
+  }
+
+  private _wireCalloutBadgeEvents(
+    target: { on(event: string, handler: (...args: unknown[]) => void): void },
+    resolveAnchor: (
+      kind: CalloutBadgeKind,
+    ) => { anchorKind: CalloutAnchorKind; anchorId: string } | null,
+  ): void {
+    const forward = (eventType: CalloutBadgeEvent['eventType']) =>
+      (...args: unknown[]) => {
+        const payload = args[0] as
+          | { kind?: CalloutBadgeKind; x?: number; y?: number; originalEvent?: Event }
+          | undefined
+        const kind: CalloutBadgeKind = payload?.kind ?? 'callout'
+        const anchor = resolveAnchor(kind)
+        if (!anchor) return
+        this._emitCalloutBadgeEvent(
+          eventType,
+          anchor.anchorKind,
+          anchor.anchorId,
+          kind,
+          payload,
+        )
+      }
+    target.on('callout:click', forward('click'))
+    target.on('callout:hover', forward('hover'))
+    target.on('callout:hoverend', forward('hoverend'))
+  }
+
   // ── Private rendering ────────────────────────────────────
 
   private _renderGraph(positioned: PositionedGraph): void {
@@ -1040,7 +1236,15 @@ export class MermaidRenderer {
 
       // Single click = fold/unfold
       let lastTapTime = 0
-      sgc.on('pointertap', () => {
+      sgc.on('pointertap', (e: FederatedPointerEvent) => {
+        // Annotation marker first: route taps inside a marker's radius to
+        // callout:click (with the marker's kind) instead of fold/focus.
+        const markerHit = sgc.getCalloutBadgeAt(e.global.x, e.global.y)
+        if (markerHit) {
+          sgc.dispatchCalloutTap(markerHit.kind, e.nativeEvent as Event | undefined)
+          return
+        }
+
         const now = Date.now()
         if (now - lastTapTime < 400) {
           // Double-click = isolate/focus into subgraph
@@ -1063,6 +1267,11 @@ export class MermaidRenderer {
           }
         }, 250) // wait 250ms to distinguish from double-click
       })
+
+      this._wireCalloutBadgeEvents(sgc, () => ({
+        anchorKind: 'subgraph',
+        anchorId: sgId,
+      }))
 
       this._viewport.addChild(sgc)
     }
@@ -1146,6 +1355,13 @@ export class MermaidRenderer {
       this._viewport.addChild(sprite)
       if (node.metadata?._isStub) continue
 
+      // Callout badge interactions — resolved lazily so a collapsed-subgraph
+      // summary node reports its subgraph's anchor, not its synthetic node id.
+      this._wireCalloutBadgeEvents(sprite, (kind) => {
+        const spec = this._calloutSpecForNodeSprite(id, sprite, kind)
+        return spec ? { anchorKind: spec.anchorKind, anchorId: spec.anchorId } : null
+      })
+
       // Hover: highlight connected edges + bus lines, dim unrelated
       sprite.on('pointerover', () => {
         if (this._performanceMode === 'stress') return
@@ -1159,6 +1375,16 @@ export class MermaidRenderer {
 
       // Wire node click — select only, no navigation
       sprite.on('pointertap', (e: FederatedPointerEvent) => {
+        // Annotation marker first: the marker is not its own pointer target,
+        // so the sprite's handler routes taps inside a marker's radius to
+        // callout:click (with the marker's kind) and swallows the node
+        // click/selection entirely.
+        const markerHit = sprite.getCalloutBadgeAt(e.global.x, e.global.y)
+        if (markerHit) {
+          sprite.dispatchCalloutTap(markerHit.kind, e.nativeEvent as Event | undefined)
+          return
+        }
+
         // If this is a collapsed summary node, clicking expands it
         if (node.metadata?._isCollapsedSummary) {
           const sgId = node.metadata._subgraphId as string
@@ -1288,6 +1514,10 @@ export class MermaidRenderer {
     }
 
     this._applySceneOpacityState()
+
+    // Sprites were just rebuilt from scratch — re-apply the callout badge set
+    // so badges survive load/relayout/philosophy/theme/fold/focus rebuilds.
+    this._applyCalloutBadges()
 
     this._touchRuntimeActivity()
   }
@@ -1566,6 +1796,7 @@ export class MermaidRenderer {
       width: target.clientWidth,
       height: target.clientHeight,
     }
+    this._lastSettledCanvasSize = { ...this._lastObservedCanvasSize }
     this._resizeObserver = new ResizeObserver(() => {
       const nextSize = {
         width: target.clientWidth,
@@ -1585,9 +1816,18 @@ export class MermaidRenderer {
       this._resizeRafId = requestAnimationFrame(() => {
         this._resizeRafId = null
         if (this._destroyed || !this._app || !this._viewport) return
-        // Pixi resizes the backing renderer through `resizeTo`. Keep the
-        // viewport transform untouched so host layout changes do not discard
-        // the user's pan and zoom.
+        // Pixi resizes the backing renderer through `resizeTo`. For an
+        // incidental host layout change, keep the viewport transform
+        // untouched so it does not discard the user's pan and zoom. A
+        // drastic single-step change (fullscreen toggle, pane reveal) is
+        // different: the old transform renders the diagram at a stale scale
+        // in a radically different viewport, so refit — even over a manual
+        // pan/zoom, because that transform was chosen for the old viewport.
+        const previousSize = this._lastSettledCanvasSize
+        this._lastSettledCanvasSize = nextSize
+        if (this._renderedBounds && isDrasticCanvasResize(previousSize, nextSize)) {
+          this.fitToView({ preserveReadableZoom: true })
+        }
         if (this._currentPhilosophy === 'blueprint' && this._positioned) {
           this._redrawBlueprintGrid(nextSize.width, nextSize.height, this._positioned)
         }
@@ -1698,6 +1938,7 @@ export class MermaidRenderer {
       this._resizeRafId = null
     }
     this._lastObservedCanvasSize = null
+    this._lastSettledCanvasSize = null
     if (this._colorSchemeMediaQuery && this._colorSchemeChangeHandler) {
       this._colorSchemeMediaQuery.removeEventListener('change', this._colorSchemeChangeHandler)
       this._colorSchemeChangeHandler = null
@@ -1879,6 +2120,10 @@ export class MermaidRenderer {
   }
 
   private _wireEdgeInteraction(edgeGraphic: EdgeGraphic): void {
+    this._wireCalloutBadgeEvents(edgeGraphic, () => ({
+      anchorKind: 'edge',
+      anchorId: edgeGraphic.data.id,
+    }))
     edgeGraphic.on('pointerover', () => {
       if (this._performanceMode === 'stress') return
       this._setHoveredEdge(edgeGraphic.data.id)
@@ -1889,6 +2134,14 @@ export class MermaidRenderer {
       }
     })
     edgeGraphic.on('pointertap', (e: FederatedPointerEvent) => {
+      // Annotation marker first: route taps inside a marker's radius to
+      // callout:click (with the marker's kind) instead of edge click/selection.
+      const markerHit = edgeGraphic.getCalloutBadgeAt(e.global.x, e.global.y)
+      if (markerHit) {
+        edgeGraphic.dispatchCalloutTap(markerHit.kind, e.nativeEvent as Event | undefined)
+        return
+      }
+
       const evt: EdgeEvent = {
         edgeId: edgeGraphic.data.id,
         source: edgeGraphic.data.source,
