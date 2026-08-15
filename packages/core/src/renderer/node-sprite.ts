@@ -3,6 +3,35 @@ import type { PositionedNode, NodeShape } from '../types'
 import { ensureFontsInstalled } from './fonts'
 import type { Theme } from './theme'
 import { estimateRenderedNodeFootprint } from '../node-footprint'
+import {
+  computeErEntityTableLayout,
+  type ErEntityTableLayout,
+  type ErTableAttributeRow,
+} from '../er-table-layout'
+import {
+  computeClassCompartmentLayout,
+  type ClassCompartmentLayout,
+} from '../class-compartment-layout'
+import { computeNodeLabelLayout } from '../layout/text-measure'
+import { splitRenderedLabelIntoRichLines } from '../label-markup'
+import {
+  computeNodeSemanticSubitems,
+  type NodeSemanticSubitem,
+} from '../semantic-subitems'
+import {
+  CALLOUT_BADGE_HIT_RADIUS,
+  type CalloutBadgeSlot,
+  calloutBadgeGlobalPoints,
+  calloutBadgeSlotAtGlobalPoint,
+  type CalloutBadgeState,
+  computeNodeCalloutBadgePosition,
+  rebuildCalloutBadgeSlots,
+  wireCalloutBadgeHoverRouting,
+} from './callout-badge'
+import type { CalloutBadgeKind } from '../types'
+
+const RENDERED_LABEL_PADDING_X = 40
+const RENDERED_LABEL_PADDING_Y = 24
 
 type BoundsRect = {
   x: number
@@ -11,13 +40,26 @@ type BoundsRect = {
   height: number
 }
 
+export type ScreenSemanticSubitem = NodeSemanticSubitem
+
+type ResolvedNodeStyle = {
+  fill: number
+  stroke: number
+  text: number
+  strokeWidth: number
+  strokeDasharray?: number[]
+}
+
 export class NodeSprite extends Container {
   data: PositionedNode
   private _gfx!: Graphics
   private _hoverGfx!: Graphics
   private _selectionGfx!: Graphics
-  private _label!: BitmapText
+  private _label!: Container
+  private _labelTexts: BitmapText[] = []
+  private _labelTextBaseFontSizes: number[] = []
   private _linkBadge: Graphics | null = null
+  private _linkState: false | 'valid' | 'broken' = false
   private _hovered = false
   private _selected = false
   private _theme: Theme
@@ -26,6 +68,8 @@ export class NodeSprite extends Container {
   private _fontName: string
   private _badgeAccent: number | null = null
   private _badgeKind: 'valid' | 'broken' | null = null
+  private _calloutSlots: CalloutBadgeSlot[] = []
+  private _calloutStates: CalloutBadgeState[] = []
 
   constructor(
     node: PositionedNode,
@@ -37,7 +81,7 @@ export class NodeSprite extends Container {
     this.data = node
     this._theme = theme
     this._displayWidth = estimateRenderedNodeFootprint(node, fontName === 'MermaidBlueprint').width
-    this._displayHeight = node.height
+    this._displayHeight = estimateRenderedNodeFootprint(node, fontName === 'MermaidBlueprint').height
     this._fontName = fontName
 
     this.x = node.x
@@ -56,6 +100,16 @@ export class NodeSprite extends Container {
     this.on('pointerout', () => {
       this._hovered = false
       this._hoverGfx.alpha = 0
+    })
+
+    // Badge hover is routed by the HOST (the badge is not a pointer target):
+    // pointer movement over the sprite consults the badge hit test, scales
+    // the badge, and emits callout:hover / callout:hoverend transitions.
+    wireCalloutBadgeHoverRouting(this, {
+      getSlots: () => this._calloutSlots,
+      hitTest: (globalX, globalY) => this.getCalloutBadgeAt(globalX, globalY)?.kind ?? null,
+      onHover: (kind, originalEvent) => this._emitCalloutEvent('callout:hover', kind, originalEvent),
+      onHoverEnd: (kind, originalEvent) => this._emitCalloutEvent('callout:hoverend', kind, originalEvent),
     })
   }
 
@@ -76,39 +130,67 @@ export class NodeSprite extends Container {
     this.data = node
     this._theme = theme
     this._fontName = fontName
-    this._displayWidth = estimateRenderedNodeFootprint(node, fontName === 'MermaidBlueprint').width
-    this._displayHeight = node.height
+    this._linkState = linkState
+    const usesBlueprintFont = fontName === 'MermaidBlueprint'
+    const renderedFootprint = estimateRenderedNodeFootprint(node, fontName === 'MermaidBlueprint')
+    const erTableLayout = computeErEntityTableLayout(node, usesBlueprintFont)
+    const classCompartmentLayout = computeClassCompartmentLayout(node, usesBlueprintFont)
+    const labelLayout = erTableLayout || classCompartmentLayout
+      ? null
+      : computeNodeLabelLayout(
+        node.label,
+        node.width,
+        node.height,
+        RENDERED_LABEL_PADDING_X / 2,
+        usesBlueprintFont,
+      )
+    this._displayWidth = renderedFootprint.width
+    this._displayHeight = renderedFootprint.height
     this._badgeAccent = null
     this._badgeKind = null
     this.removeChildren()
 
     // Main shape
     this._gfx = new Graphics()
-    this._drawShape(node.shape, this._displayWidth, node.height, theme.nodeStroke)
+    const nodeStyle = this._resolveNodeStyle(node, theme)
+    if (erTableLayout) {
+      this._drawErEntityTable(erTableLayout, nodeStyle)
+    } else if (classCompartmentLayout) {
+      this._drawClassCompartment(classCompartmentLayout, nodeStyle)
+    } else {
+      this._drawShape(node.shape, this._displayWidth, this._displayHeight, nodeStyle)
+    }
     this.addChild(this._gfx)
 
-    // Label — full text, node must be sized to fit
+    // Label — sanitized rich text, node must be sized to fit.
     ensureFontsInstalled()
-    this._label = new BitmapText({
-      text: node.label,
-      style: { fontFamily: fontName, fontSize: 14, fill: theme.nodeText },
-    })
-    this._label.anchor.set(0.5)
+    const labelMetrics = erTableLayout
+      ? this._buildErEntityTableLabel(erTableLayout, fontName, nodeStyle)
+      : classCompartmentLayout
+        ? this._buildClassCompartmentLabel(classCompartmentLayout, fontName, nodeStyle)
+      : this._buildLabel(labelLayout!.label, node, fontName, nodeStyle.text, 14)
     this.addChild(this._label)
 
     // If label is wider than node, expand the node shape to fit
-    const labelWidth = this._label.width
-    if (labelWidth + 24 > this._displayWidth) {
-      const expandedWidth = labelWidth + 24
-      this._displayWidth = expandedWidth
-      this._gfx.clear()
-      this._drawShape(node.shape, expandedWidth, node.height, theme.nodeStroke)
+    if (!erTableLayout && !classCompartmentLayout) {
+      const labelWidth = labelMetrics.width
+      if (labelWidth + RENDERED_LABEL_PADDING_X > this._displayWidth) {
+        const expandedWidth = labelWidth + RENDERED_LABEL_PADDING_X
+        this._displayWidth = expandedWidth
+        this._gfx.clear()
+        this._drawShape(node.shape, expandedWidth, this._displayHeight, nodeStyle)
+      }
+      if (labelMetrics.height + RENDERED_LABEL_PADDING_Y > this._displayHeight) {
+        this._displayHeight = labelMetrics.height + RENDERED_LABEL_PADDING_Y
+        this._gfx.clear()
+        this._drawShape(node.shape, this._displayWidth, this._displayHeight, nodeStyle)
+      }
     }
 
     // Link badge — interactive icon at top-right indicating "has linked file"
     if (linkState) {
       const bx = this._displayWidth / 2 - 6
-      const by = -node.height / 2 + 6
+      const by = -this._displayHeight / 2 + 6
       const accent = linkState === 'broken' ? theme.brokenLinkAccent : theme.accent
       const badgeKind = linkState === 'broken' ? 'broken' : 'valid'
       this._badgeAccent = accent
@@ -118,7 +200,7 @@ export class NodeSprite extends Container {
       this._linkBadge.cursor = 'pointer'
 
       // Draw badge circle + arrow
-      this._drawLinkBadge(bx, by, accent, theme.nodeFill, 1.0, badgeKind)
+      this._drawLinkBadge(bx, by, accent, nodeStyle.fill, 1.0, badgeKind)
 
       // Badge hit area (larger than visual for easier clicking)
       this._linkBadge.hitArea = {
@@ -131,11 +213,11 @@ export class NodeSprite extends Container {
       // Hover: enlarge badge
       this._linkBadge.on('pointerover', () => {
         this._linkBadge!.clear()
-        this._drawLinkBadge(bx, by, accent, theme.nodeFill, 1.3, badgeKind)
+        this._drawLinkBadge(bx, by, accent, nodeStyle.fill, 1.3, badgeKind)
       })
       this._linkBadge.on('pointerout', () => {
         this._linkBadge!.clear()
-        this._drawLinkBadge(bx, by, accent, theme.nodeFill, 1.0, badgeKind)
+        this._drawLinkBadge(bx, by, accent, nodeStyle.fill, 1.0, badgeKind)
       })
 
       // Click badge emits 'badge:click' — renderer wires this to link:navigate
@@ -147,28 +229,366 @@ export class NodeSprite extends Container {
       this.addChild(this._linkBadge)
     }
 
+    // Annotation markers — rebuilt from stored state so they survive every
+    // internal rebuild (theme, relayout appearance updates, selection).
+    this._syncCalloutBadges()
+
     // Hover/selection overlays stay above labels and badges.
     this._hoverGfx = new Graphics()
     this._hoverGfx.alpha = 0
     this.addChild(this._hoverGfx)
-    this._drawHoverGlow(node.shape, this._displayWidth + 12, node.height + 12)
+    this._drawHoverGlow(node.shape, this._displayWidth + 12, this._displayHeight + 12)
 
     this._selectionGfx = new Graphics()
     this._selectionGfx.alpha = 0
     this.addChild(this._selectionGfx)
-    this._drawSelectionRing(node.shape, this._displayWidth + 10, node.height + 10)
+    this._drawSelectionRing(node.shape, this._displayWidth + 10, this._displayHeight + 10)
 
-    // Hit area
+    // Hit area — the shape rect, extended with each marker's circle so the
+    // badge sliver that pokes past the corner stays clickable (the host must
+    // receive the event for badge routing to run).
     this.hitArea = {
       contains: (x: number, y: number) => {
         const hw = this._displayWidth / 2 + 4
         const hh = this._displayHeight / 2 + 4
-        return x >= -hw && x <= hw && y >= -hh && y <= hh
+        if (x >= -hw && x <= hw && y >= -hh && y <= hh) return true
+        for (const slot of this._calloutSlots) {
+          const dx = x - slot.badge.x
+          const dy = y - slot.badge.y
+          if (dx * dx + dy * dy <= CALLOUT_BADGE_HIT_RADIUS * CALLOUT_BADGE_HIT_RADIUS) {
+            return true
+          }
+        }
+        return false
       },
     }
 
     this._selectionGfx.alpha = this._selected ? 1 : 0
     this._hoverGfx.alpha = this._hovered ? 1 : 0
+  }
+
+  private _buildLabel(
+    renderedText: string,
+    node: PositionedNode,
+    fontName: string,
+    fill: number,
+    fontSize: number,
+  ): { width: number; height: number } {
+    this._label = new Container()
+    this._labelTexts = []
+    this._labelTextBaseFontSizes = []
+
+    const lines = splitRenderedLabelIntoRichLines(renderedText, node.labelMarkup)
+    const lineHeight = Math.ceil(fontSize * 1.35)
+    const startY = -((lines.length - 1) * lineHeight) / 2
+    let maxWidth = 0
+
+    lines.forEach((line, lineIndex) => {
+      const segmentTexts = line.length > 0 ? line : [{ text: '', bold: false }]
+      const created: BitmapText[] = []
+      let width = 0
+
+      for (const segment of segmentTexts) {
+        if (segment.text.length === 0) continue
+        const text = new BitmapText({
+          text: segment.text,
+          style: {
+            fontFamily: segment.bold ? this._boldFontName(fontName) : fontName,
+            fontSize,
+            fill,
+          },
+        })
+        text.anchor.set(0, 0.5)
+        text.x = width
+        text.y = startY + lineIndex * lineHeight
+        width += text.width
+        created.push(text)
+        this._trackLabelText(text, fontSize)
+      }
+
+      const offsetX = -width / 2
+      for (const text of created) {
+        text.x += offsetX
+        this._label.addChild(text)
+      }
+      maxWidth = Math.max(maxWidth, width)
+    })
+
+    return {
+      width: maxWidth,
+      height: Math.max(lineHeight, lines.length * lineHeight),
+    }
+  }
+
+  private _boldFontName(fontName: string): string {
+    return fontName === 'MermaidBlueprint' ? 'MermaidBlueprintBold' : 'MermaidNodeBold'
+  }
+
+  private _trackLabelText(text: BitmapText, baseFontSize: number): void {
+    this._labelTexts.push(text)
+    this._labelTextBaseFontSizes.push(baseFontSize)
+  }
+
+  private _drawErEntityTable(layout: ErEntityTableLayout, nodeStyle: ResolvedNodeStyle): void {
+    const g = this._gfx
+    const left = -layout.width / 2
+    const top = -layout.height / 2
+    const right = layout.width / 2
+    const bottom = layout.height / 2
+    const rowTop = top + layout.headerHeight
+    const r = this._theme.cornerRadius
+
+    g.roundRect(left, top, layout.width, layout.height, r)
+    g.fill({ color: nodeStyle.fill })
+    g.roundRect(left, top, layout.width, layout.headerHeight, r)
+    g.fill({ color: nodeStyle.stroke, alpha: 0.18 })
+
+    g.moveTo(left, rowTop).lineTo(right, rowTop)
+    g.stroke({ width: nodeStyle.strokeWidth, color: nodeStyle.stroke, alpha: 0.9 })
+
+    if (layout.rows.length > 0) {
+      const dividerX = left + layout.typeDividerLeft
+      g.moveTo(dividerX, rowTop).lineTo(dividerX, bottom)
+      g.stroke({ width: 1, color: this._theme.edgeColor, alpha: 0.48 })
+    }
+
+    for (let rowIndex = 0; rowIndex < layout.rows.length; rowIndex += 1) {
+      const y = rowTop + rowIndex * layout.rowHeight
+      if (rowIndex % 2 === 1) {
+        g.rect(left, y, layout.width, layout.rowHeight)
+        g.fill({ color: this._theme.background, alpha: 0.12 })
+      }
+
+      if (rowIndex > 0) {
+        g.moveTo(left, y).lineTo(right, y)
+        g.stroke({ width: 1, color: this._theme.edgeColor, alpha: 0.34 })
+      }
+
+      this._drawErKeyBadge(layout, layout.rows[rowIndex], y)
+    }
+
+    g.roundRect(left, top, layout.width, layout.height, r)
+    g.stroke({ width: nodeStyle.strokeWidth, color: nodeStyle.stroke })
+  }
+
+  private _drawErKeyBadge(
+    layout: ErEntityTableLayout,
+    row: ErTableAttributeRow,
+    rowY: number,
+  ): void {
+    if (!row.keyLabel) return
+
+    const left = -layout.width / 2
+    const badgeWidth = Math.max(22, layout.keyColumnWidth - 6)
+    const badgeHeight = 14
+    const badgeX = left + layout.paddingX
+    const badgeY = rowY + (layout.rowHeight - badgeHeight) / 2
+    const badgeFill = row.isPrimaryKey
+      ? this._theme.accent
+      : row.isForeignKey
+        ? this._theme.edgeColor
+        : this._theme.nodeStroke
+
+    this._gfx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 3)
+    this._gfx.fill({ color: badgeFill, alpha: 0.9 })
+  }
+
+  private _buildErEntityTableLabel(
+    layout: ErEntityTableLayout,
+    fontName: string,
+    nodeStyle: ResolvedNodeStyle,
+  ): { width: number; height: number } {
+    this._label = new Container()
+    this._labelTexts = []
+    this._labelTextBaseFontSizes = []
+
+    const left = -layout.width / 2
+    const top = -layout.height / 2
+    const header = new BitmapText({
+      text: layout.entityName,
+      style: {
+        fontFamily: this._boldFontName(fontName),
+        fontSize: 15,
+        fill: nodeStyle.text,
+      },
+    })
+    header.anchor.set(0.5)
+    header.x = 0
+    header.y = top + layout.headerHeight / 2
+    this._trackLabelText(header, 15)
+    this._label.addChild(header)
+
+    for (let rowIndex = 0; rowIndex < layout.rows.length; rowIndex += 1) {
+      const row = layout.rows[rowIndex]
+      const centerY = top + layout.headerHeight + rowIndex * layout.rowHeight + layout.rowHeight / 2
+
+      if (row.keyLabel) {
+        const key = new BitmapText({
+          text: row.keyLabel,
+          style: {
+            fontFamily: this._boldFontName(fontName),
+            fontSize: 10,
+            fill: this._theme.background,
+          },
+        })
+        key.anchor.set(0.5)
+        key.x = left + layout.paddingX + Math.max(22, layout.keyColumnWidth - 6) / 2
+        key.y = centerY
+        this._trackLabelText(key, 10)
+        this._label.addChild(key)
+      }
+
+      const name = new BitmapText({
+        text: row.name,
+        style: {
+          fontFamily: row.isPrimaryKey ? this._boldFontName(fontName) : fontName,
+          fontSize: 13,
+          fill: nodeStyle.text,
+        },
+      })
+      name.anchor.set(0, 0.5)
+      name.x = left + layout.nameColumnLeft
+      name.y = centerY
+      this._trackLabelText(name, 13)
+      this._label.addChild(name)
+
+      const type = new BitmapText({
+        text: row.type,
+        style: {
+          fontFamily: fontName,
+          fontSize: 12,
+          fill: this._theme.edgeLabelColor,
+        },
+      })
+      type.anchor.set(0, 0.5)
+      type.x = left + layout.typeColumnLeft
+      type.y = centerY
+      this._trackLabelText(type, 12)
+      this._label.addChild(type)
+    }
+
+    return {
+      width: layout.width,
+      height: layout.height,
+    }
+  }
+
+  private _drawClassCompartment(layout: ClassCompartmentLayout, nodeStyle: ResolvedNodeStyle): void {
+    const g = this._gfx
+    const left = -layout.width / 2
+    const top = -layout.height / 2
+    const right = layout.width / 2
+    const r = this._theme.cornerRadius
+
+    g.roundRect(left, top, layout.width, layout.height, r)
+    g.fill({ color: nodeStyle.fill })
+    g.roundRect(left, top, layout.width, layout.headerHeight, r)
+    g.fill({ color: nodeStyle.stroke, alpha: 0.18 })
+    g.moveTo(left, top + layout.headerHeight).lineTo(right, top + layout.headerHeight)
+    g.stroke({ width: nodeStyle.strokeWidth, color: nodeStyle.stroke, alpha: 0.9 })
+
+    for (const section of layout.sections) {
+      const sectionTop = top + section.top
+      g.rect(left, sectionTop, layout.width, layout.sectionHeaderHeight)
+      g.fill({ color: this._theme.background, alpha: 0.16 })
+      g.moveTo(left, sectionTop).lineTo(right, sectionTop)
+      g.stroke({ width: 1, color: this._theme.edgeColor, alpha: 0.38 })
+      g.moveTo(left, sectionTop + layout.sectionHeaderHeight).lineTo(right, sectionTop + layout.sectionHeaderHeight)
+      g.stroke({ width: 1, color: this._theme.edgeColor, alpha: 0.34 })
+
+      for (let rowIndex = 0; rowIndex < section.rows.length; rowIndex += 1) {
+        const rowTop = sectionTop + layout.sectionHeaderHeight + rowIndex * layout.rowHeight
+        if (rowIndex % 2 === 1) {
+          g.rect(left, rowTop, layout.width, layout.rowHeight)
+          g.fill({ color: this._theme.background, alpha: 0.1 })
+        }
+      }
+    }
+
+    g.roundRect(left, top, layout.width, layout.height, r)
+    g.stroke({ width: nodeStyle.strokeWidth, color: nodeStyle.stroke })
+  }
+
+  private _buildClassCompartmentLabel(
+    layout: ClassCompartmentLayout,
+    fontName: string,
+    nodeStyle: ResolvedNodeStyle,
+  ): { width: number; height: number } {
+    this._label = new Container()
+    this._labelTexts = []
+    this._labelTextBaseFontSizes = []
+
+    const left = -layout.width / 2
+    const top = -layout.height / 2
+    const titleY = top + (layout.stereotypeLabel ? 15 : layout.headerHeight / 2)
+    const header = new BitmapText({
+      text: layout.className,
+      style: {
+        fontFamily: this._boldFontName(fontName),
+        fontSize: 15,
+        fill: nodeStyle.text,
+      },
+    })
+    header.anchor.set(0.5)
+    header.x = 0
+    header.y = titleY
+    this._trackLabelText(header, 15)
+    this._label.addChild(header)
+
+    if (layout.stereotypeLabel) {
+      const stereotype = new BitmapText({
+        text: layout.stereotypeLabel,
+        style: {
+          fontFamily: fontName,
+          fontSize: 10,
+          fill: this._theme.edgeLabelColor,
+        },
+      })
+      stereotype.anchor.set(0.5)
+      stereotype.x = 0
+      stereotype.y = top + 29
+      this._trackLabelText(stereotype, 10)
+      this._label.addChild(stereotype)
+    }
+
+    for (const section of layout.sections) {
+      const sectionTop = top + section.top
+      const sectionTitle = new BitmapText({
+        text: section.title.toUpperCase(),
+        style: {
+          fontFamily: this._boldFontName(fontName),
+          fontSize: 10,
+          fill: this._theme.edgeLabelColor,
+        },
+      })
+      sectionTitle.anchor.set(0, 0.5)
+      sectionTitle.x = left + layout.paddingX
+      sectionTitle.y = sectionTop + layout.sectionHeaderHeight / 2
+      this._trackLabelText(sectionTitle, 10)
+      this._label.addChild(sectionTitle)
+
+      for (let rowIndex = 0; rowIndex < section.rows.length; rowIndex += 1) {
+        const row = section.rows[rowIndex]
+        const rowText = new BitmapText({
+          text: row.text,
+          style: {
+            fontFamily: fontName,
+            fontSize: 12,
+            fill: nodeStyle.text,
+          },
+        })
+        rowText.anchor.set(0, 0.5)
+        rowText.x = left + layout.paddingX
+        rowText.y = sectionTop + layout.sectionHeaderHeight + rowIndex * layout.rowHeight + layout.rowHeight / 2
+        this._trackLabelText(rowText, 12)
+        this._label.addChild(rowText)
+      }
+    }
+
+    return {
+      width: layout.width,
+      height: layout.height,
+    }
   }
 
   private _drawLinkBadge(
@@ -197,13 +617,123 @@ export class NodeSprite extends Container {
     g.stroke({ width: 1.5 * scale, color: fill })
   }
 
+  /**
+   * Attach this node's annotation markers (empty array detaches them all).
+   * At most one marker per kind; callout keeps the corner slot, a comment
+   * pin sits in the next slot left of it.
+   *
+   * Each marker is a child of the sprite, positioned at the shape's
+   * top-right corner in LOCAL coordinates, so pan/zoom/relayout correctness
+   * is inherited from the display tree rather than recomputed. State is
+   * stored so `_rebuildVisuals` can re-create the markers after any rebuild.
+   */
+  setCalloutBadges(states: CalloutBadgeState[]): void {
+    this._calloutStates = states.map((state) => ({ ...state }))
+    this._syncCalloutBadges()
+  }
+
+  hasCalloutBadge(kind?: CalloutBadgeKind): boolean {
+    if (kind === undefined) return this._calloutSlots.length > 0
+    return this._calloutSlots.some((slot) => slot.state.kind === kind)
+  }
+
+  /**
+   * Global-coordinate marker hit test, consulted by the renderer's own
+   * `pointertap` handler (and this sprite's hover routing) BEFORE any
+   * node-level behaviour — same idiom as `getSemanticSubitemAt`. Returns the
+   * hit marker's state (including its kind) so the caller can route to the
+   * right event.
+   */
+  getCalloutBadgeAt(globalX: number, globalY: number): CalloutBadgeState | null {
+    return calloutBadgeSlotAtGlobalPoint(this, this._calloutSlots, globalX, globalY)
+      ?.state ?? null
+  }
+
+  /** Each marker's centre in global coordinates (see `calloutBadgeGlobalPoints`). */
+  getCalloutBadgePoints(): { kind: CalloutBadgeKind; x: number; y: number }[] {
+    return calloutBadgeGlobalPoints(this, this._calloutSlots)
+  }
+
+  /** Emit a marker's `callout:click` (host-routed tap; see module doc). */
+  dispatchCalloutTap(kind: CalloutBadgeKind, originalEvent?: Event): void {
+    this._emitCalloutEvent('callout:click', kind, originalEvent)
+  }
+
+  getCalloutBadgeDebug(
+    kind: CalloutBadgeKind = 'callout',
+  ): { x: number; y: number; count?: number } | null {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    if (!slot) return null
+    return {
+      x: slot.badge.x,
+      y: slot.badge.y,
+      ...(slot.state.count !== undefined ? { count: slot.state.count } : {}),
+    }
+  }
+
+  /** Current marker scale (hover feedback), for tests/debug. */
+  getCalloutBadgeHoverScale(kind: CalloutBadgeKind = 'callout'): number | null {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    return slot ? slot.badge.scale.x : null
+  }
+
+  private _syncCalloutBadges(): void {
+    const nodeStyle = this._resolveNodeStyle(this.data, this._theme)
+    this._calloutSlots = rebuildCalloutBadgeSlots(this._calloutSlots, this._calloutStates, {
+      accents: this._theme,
+      surface: nodeStyle.fill,
+      fontName: this._fontName === 'MermaidBlueprint' ? 'MermaidBlueprint' : 'MermaidLabel',
+      positionFor: (slotIndex) => computeNodeCalloutBadgePosition(
+        this._displayWidth,
+        this._displayHeight,
+        this._linkState !== false,
+        slotIndex,
+      ),
+      addChild: (badge) => {
+        // Keep hover/selection overlays above the badge when attached.
+        if (this._hoverGfx && this._hoverGfx.parent === this) {
+          this.addChildAt(badge, this.getChildIndex(this._hoverGfx))
+        } else {
+          this.addChild(badge)
+        }
+      },
+    })
+  }
+
+  private _emitCalloutEvent(
+    event: string,
+    kind: CalloutBadgeKind,
+    originalEvent?: Event,
+  ): void {
+    const slot = this._calloutSlots.find((candidate) => candidate.state.kind === kind)
+    if (!slot) return
+    const global = slot.badge.getGlobalPosition()
+    this.emit(event as 'callout:click', {
+      kind,
+      x: global.x,
+      y: global.y,
+      originalEvent,
+    })
+  }
+
   setSelected(selected: boolean): void {
     if (this._selected === selected) return
     this._selected = selected
+    if (
+      computeErEntityTableLayout(this.data, this._fontName === 'MermaidBlueprint') ||
+      computeClassCompartmentLayout(this.data, this._fontName === 'MermaidBlueprint')
+    ) {
+      this._rebuildVisuals(this.data, this._theme, this._linkState, this._fontName)
+      return
+    }
     this._gfx.clear()
     this._drawShape(
       this.data.shape, this._displayWidth, this._displayHeight,
-      selected ? this._theme.nodeStrokeSelected : this._theme.nodeStroke,
+      this._resolveNodeStyle(
+        this.data,
+        this._theme,
+        selected ? this._theme.nodeStrokeSelected : undefined,
+      ),
     )
     this._selectionGfx.alpha = selected ? 1 : 0
     this._hoverGfx.alpha = this._hovered ? 1 : 0
@@ -225,7 +755,7 @@ export class NodeSprite extends Container {
     this._gfx.alpha = 1
 
     if (absoluteZoom < 0.7) {
-      this._label.style.fontSize = 14
+      this._setLabelFontSize(14)
       this._label.alpha = absoluteZoom < 0.28 ? 0.55 : 0.9
       return
     }
@@ -242,7 +772,20 @@ export class NodeSprite extends Container {
     const clampedScreenSize = Math.max(minScreenPx, Math.min(maxScreenPx, screenSize))
     const finalWorldSize = clampedScreenSize / Math.max(absoluteZoom, 0.05)
 
-    this._label.style.fontSize = finalWorldSize
+    // Never exceed the base size: `_rebuildVisuals` sizes the shape to
+    // contain the label at the base font (goal.md items 14–15), so any
+    // larger world font can spill outside the shape. Clamping the font —
+    // rather than growing the shape to chase it — keeps node geometry
+    // stable through a zoom gesture: hit areas, hover/selection rings,
+    // badges, and the layout footprint all derive from the shape size.
+    this._setLabelFontSize(Math.min(baseFontSize, finalWorldSize))
+  }
+
+  private _setLabelFontSize(fontSize: number): void {
+    const scale = fontSize / 14
+    for (const [index, labelText] of this._labelTexts.entries()) {
+      labelText.style.fontSize = (this._labelTextBaseFontSizes[index] ?? 14) * scale
+    }
   }
 
   getShapeBounds(): BoundsRect {
@@ -260,6 +803,40 @@ export class NodeSprite extends Container {
     return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
   }
 
+  getSemanticSubitemAnchors(): ScreenSemanticSubitem[] {
+    const layout = computeNodeSemanticSubitems(
+      this.data,
+      this._fontName === 'MermaidBlueprint',
+    )
+    if (!layout) return []
+
+    const bounds = this.getShapeBounds()
+    const scaleX = bounds.width / layout.width
+    const scaleY = bounds.height / layout.height
+    return layout.items.map((item) => ({
+      ...item,
+      x: bounds.x + item.x * scaleX,
+      y: bounds.y + item.y * scaleY,
+      width: item.width * scaleX,
+      height: item.height * scaleY,
+    }))
+  }
+
+  getSemanticSubitemAt(
+    screenX: number,
+    screenY: number,
+  ): ScreenSemanticSubitem | null {
+    return (
+      this.getSemanticSubitemAnchors().find(
+        (item) =>
+          screenX >= item.x &&
+          screenX <= item.x + item.width &&
+          screenY >= item.y &&
+          screenY <= item.y + item.height,
+      ) ?? null
+    )
+  }
+
   isHovered(): boolean {
     return this._hovered
   }
@@ -269,6 +846,8 @@ export class NodeSprite extends Container {
     nodeStroke: number
     labelFill: number
     labelFontFamily: string
+    labelText: string
+    labelSegmentFontFamilies: string[]
     brokenBadgeAccent: number | null
     badgeKind: 'valid' | 'broken' | null
     hoverAlpha: number
@@ -279,11 +858,18 @@ export class NodeSprite extends Container {
     hoverLayerIndex: number
     selectionLayerIndex: number
   } {
+    const nodeStyle = this._resolveNodeStyle(
+      this.data,
+      this._theme,
+      this._selected ? this._theme.nodeStrokeSelected : undefined,
+    )
     return {
-      nodeFill: this._theme.nodeFill,
-      nodeStroke: this._selected ? this._theme.nodeStrokeSelected : this._theme.nodeStroke,
-      labelFill: this._theme.nodeText,
+      nodeFill: nodeStyle.fill,
+      nodeStroke: nodeStyle.stroke,
+      labelFill: nodeStyle.text,
       labelFontFamily: this._fontName,
+      labelText: this._labelTexts.map((text) => text.text).join(''),
+      labelSegmentFontFamilies: this._labelTexts.map((text) => text.style.fontFamily as string),
       brokenBadgeAccent: this._badgeAccent,
       badgeKind: this._badgeKind,
       hoverAlpha: this._hoverGfx.alpha,
@@ -293,6 +879,21 @@ export class NodeSprite extends Container {
       badgeLayerIndex: this._linkBadge ? this.getChildIndex(this._linkBadge) : null,
       hoverLayerIndex: this.getChildIndex(this._hoverGfx),
       selectionLayerIndex: this.getChildIndex(this._selectionGfx),
+    }
+  }
+
+  private _resolveNodeStyle(
+    node: PositionedNode,
+    theme: Theme,
+    strokeOverride?: number,
+  ): ResolvedNodeStyle {
+    const style = node.style
+    return {
+      fill: style?.fill ?? theme.nodeFill,
+      stroke: strokeOverride ?? style?.stroke ?? theme.nodeStroke,
+      text: style?.text ?? theme.nodeText,
+      strokeWidth: style?.strokeWidth ?? theme.strokeWidth,
+      ...(style?.strokeDasharray ? { strokeDasharray: style.strokeDasharray } : {}),
     }
   }
 
@@ -328,6 +929,10 @@ export class NodeSprite extends Container {
       g.roundRect(-hw, -hh, w, h, this._theme.cornerRadius + 5)
     }
 
+    g.fill({
+      color: this._theme.nodeStrokeSelected,
+      alpha: this._theme.hoverGlowAlpha * 0.22,
+    })
     g.stroke({
       width: Math.max(2, this._theme.strokeWidth + 1.5),
       color: this._theme.nodeStrokeSelected,
@@ -335,12 +940,48 @@ export class NodeSprite extends Container {
     })
   }
 
-  private _drawShape(shape: NodeShape, w: number, h: number, strokeColor: number): void {
+  private _drawShape(shape: NodeShape, w: number, h: number, nodeStyle: ResolvedNodeStyle): void {
     const hw = w / 2
     const hh = h / 2
     const g = this._gfx
     const r = this._theme.cornerRadius
 
+    this._drawShapePath(g, shape, w, h, hw, hh, r)
+    g.fill({ color: nodeStyle.fill })
+
+    if (nodeStyle.strokeDasharray && this._canDrawDashedRect(shape)) {
+      this._drawDashedRect(
+        g,
+        -hw,
+        -hh,
+        w,
+        h,
+        nodeStyle.strokeDasharray,
+        nodeStyle.stroke,
+        nodeStyle.strokeWidth,
+      )
+    } else {
+      this._drawShapePath(g, shape, w, h, hw, hh, r)
+      g.stroke({ width: nodeStyle.strokeWidth, color: nodeStyle.stroke })
+    }
+
+    if (shape === 'subroutine') {
+      const inset = 6
+      g.moveTo(-hw + inset, -hh).lineTo(-hw + inset, hh)
+        .moveTo(hw - inset, -hh).lineTo(hw - inset, hh)
+        .stroke({ width: 1, color: nodeStyle.stroke })
+    }
+  }
+
+  private _drawShapePath(
+    g: Graphics,
+    shape: NodeShape,
+    w: number,
+    h: number,
+    hw: number,
+    hh: number,
+    r: number,
+  ): void {
     switch (shape) {
       case 'diamond':
         g.moveTo(0, -hh).lineTo(hw, 0).lineTo(0, hh).lineTo(-hw, 0).closePath()
@@ -371,15 +1012,62 @@ export class NodeSprite extends Container {
         g.rect(-hw, -hh, w, h)
         break
     }
+  }
 
-    g.fill({ color: this._theme.nodeFill })
-    g.stroke({ width: this._theme.strokeWidth, color: strokeColor })
+  private _canDrawDashedRect(shape: NodeShape): boolean {
+    return shape !== 'circle' && shape !== 'diamond' && shape !== 'hexagon'
+  }
 
-    if (shape === 'subroutine') {
-      const inset = 6
-      g.moveTo(-hw + inset, -hh).lineTo(-hw + inset, hh)
-        .moveTo(hw - inset, -hh).lineTo(hw - inset, hh)
-        .stroke({ width: 1, color: strokeColor })
+  private _drawDashedRect(
+    g: Graphics,
+    left: number,
+    top: number,
+    width: number,
+    height: number,
+    dasharray: number[],
+    color: number,
+    strokeWidth: number,
+  ): void {
+    const pattern = dasharray.filter((value) => Number.isFinite(value) && value > 0)
+    if (pattern.length === 0) {
+      g.rect(left, top, width, height)
+      g.stroke({ width: strokeWidth, color })
+      return
     }
+
+    let patternIndex = 0
+    let remaining = pattern[patternIndex]
+    let drawing = true
+
+    const drawSide = (x1: number, y1: number, x2: number, y2: number) => {
+      const dx = x2 - x1
+      const dy = y2 - y1
+      const length = Math.sqrt(dx * dx + dy * dy)
+      if (length === 0) return
+
+      let covered = 0
+      while (covered < length) {
+        const step = Math.min(remaining, length - covered)
+        const start = covered / length
+        const end = (covered + step) / length
+        if (drawing) {
+          g.moveTo(x1 + dx * start, y1 + dy * start)
+          g.lineTo(x1 + dx * end, y1 + dy * end)
+        }
+        covered += step
+        remaining -= step
+        if (remaining <= 0) {
+          patternIndex = (patternIndex + 1) % pattern.length
+          remaining = pattern[patternIndex]
+          drawing = !drawing
+        }
+      }
+    }
+
+    drawSide(left, top, left + width, top)
+    drawSide(left + width, top, left + width, top + height)
+    drawSide(left + width, top + height, left, top + height)
+    drawSide(left, top + height, left, top)
+    g.stroke({ width: strokeWidth, color })
   }
 }

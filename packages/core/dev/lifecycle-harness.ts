@@ -34,6 +34,25 @@ type DestroyCleanupResult = {
   canvasOwnershipReleased: boolean
 }
 
+type DestroyDuringMountResult = {
+  mountErrorMessage: string | null
+  appReleased: boolean
+  keyHandlerReleased: boolean
+  resizeObserverReleased: boolean
+  canvasOwnershipReleased: boolean
+  keydownListenersReleased: boolean
+  fitCallsAfterKeydown: number
+  remountSucceeded: boolean
+  remountNodeCount: number
+}
+
+type KeyboardScopeCounts = {
+  fitCalls: number
+  resetCalls: number
+  editorText: string
+  activeElementId: string
+}
+
 type ContextRecoveryResult = {
   initialNodeCount: number
   recoveredNodeCount: number
@@ -93,6 +112,11 @@ declare global {
       runMultiInstanceProbe(): Promise<LifecycleHarnessResult>
       runLifecycleMisuseProbe(): Promise<LifecycleMisuseResult>
       runDestroyCleanupProbe(): Promise<DestroyCleanupResult>
+      runDestroyDuringMountProbe(): Promise<DestroyDuringMountResult>
+      setupKeyboardScopeProbe(): Promise<void>
+      getKeyboardScopeCounts(): KeyboardScopeCounts
+      focusKeyboardScopeCanvas(): boolean
+      teardownKeyboardScopeProbe(): void
       runContextRecovery(): Promise<ContextRecoveryResult>
       runContextRecoveryVisualProbe(): Promise<ContextRecoveryVisualResult>
       runVisibilityPauseProbe(): Promise<VisibilityPauseResult>
@@ -111,9 +135,51 @@ const statusEl = document.getElementById('status') as HTMLPreElement
 let webGpuRecoveryProbe: WebGpuRecoveryResult | null = null
 let adapterFallbackVisualRenderer: MermaidRenderer | null = null
 let adapterFallbackVisualGpuDescriptor: PropertyDescriptor | null = null
+let keyboardScopeState: {
+  renderer: MermaidRenderer
+  editor: HTMLDivElement
+  counts: { fit: number; reset: number }
+  gpuDescriptor: PropertyDescriptor | null
+} | null = null
 
 function setStatus(message: string) {
   statusEl.textContent = message
+}
+
+function trackKeydownListeners(target: EventTarget) {
+  const targetAny = target as unknown as Record<string, unknown>
+  const originalAdd = targetAny.addEventListener as (...args: unknown[]) => unknown
+  const originalRemove = targetAny.removeEventListener as (...args: unknown[]) => unknown
+  // Track listener identity rather than raw add/remove call counts: the DOM
+  // treats removeEventListener for a never-registered listener as a no-op
+  // (PixiJS issues one unconditionally during destroy), so only listeners
+  // still registered at observation time count as leaks.
+  const registered = new Set<unknown>()
+  targetAny.addEventListener = function (type: string, listener: unknown, ...rest: unknown[]) {
+    if (type === 'keydown' && listener) registered.add(listener)
+    return originalAdd.call(target, type, listener, ...rest)
+  }
+  targetAny.removeEventListener = function (type: string, listener: unknown, ...rest: unknown[]) {
+    if (type === 'keydown') registered.delete(listener)
+    return originalRemove.call(target, type, listener, ...rest)
+  }
+  return {
+    liveCount: () => registered.size,
+    restore: () => {
+      delete targetAny.addEventListener
+      delete targetAny.removeEventListener
+    },
+  }
+}
+
+function teardownKeyboardScope(): void {
+  if (!keyboardScopeState) return
+  keyboardScopeState.renderer.destroy()
+  keyboardScopeState.editor.remove()
+  if (keyboardScopeState.gpuDescriptor) {
+    Object.defineProperty(navigator, 'gpu', keyboardScopeState.gpuDescriptor)
+  }
+  keyboardScopeState = null
 }
 
 async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -378,6 +444,195 @@ window.__LIFECYCLE_HARNESS__ = {
 
     setStatus(JSON.stringify(result, null, 2))
     return result
+  },
+  async runDestroyDuringMountProbe(): Promise<DestroyDuringMountResult> {
+    const originalGpuDescriptor = Object.getOwnPropertyDescriptor(navigator, 'gpu')
+    try {
+      Object.defineProperty(navigator, 'gpu', {
+        configurable: true,
+        value: undefined,
+      })
+    } catch {
+      // ignore if the browser does not let us override this property
+    }
+
+    const probeWrapper = document.createElement('div')
+    probeWrapper.style.position = 'fixed'
+    probeWrapper.style.left = '-9999px'
+    probeWrapper.style.top = '0'
+    probeWrapper.style.width = '320px'
+    probeWrapper.style.height = '180px'
+    const probeCanvas = document.createElement('canvas')
+    probeCanvas.width = 320
+    probeCanvas.height = 180
+    probeCanvas.style.width = '320px'
+    probeCanvas.style.height = '180px'
+    probeWrapper.appendChild(probeCanvas)
+    document.body.appendChild(probeWrapper)
+
+    const source = `graph TD
+      A[Start] --> B[Done]`
+
+    const windowTracker = trackKeydownListeners(window)
+    const canvasTracker = trackKeydownListeners(probeCanvas)
+
+    let mountErrorMessage: string | null = null
+    let fitCallsAfterKeydown = 0
+    const renderer = new MermaidRenderer()
+    ;(renderer as any).fitToView = () => {
+      fitCallsAfterKeydown += 1
+    }
+
+    const steps: string[] = []
+    const mark = (step: string) => {
+      steps.push(step)
+      setStatus(JSON.stringify({ steps }, null, 2))
+    }
+
+    try {
+      mark('mount:start')
+      const mountPromise = renderer.mount(probeCanvas)
+      mark('destroy:start')
+      renderer.destroy()
+      mark('destroy:done')
+      try {
+        await withTimeout(mountPromise, 'destroy-during-mount settle')
+        mark('mount:settled')
+      } catch (error) {
+        mountErrorMessage = error instanceof Error ? error.message : String(error)
+        mark('mount:rejected')
+      }
+
+      const appReleased = (renderer as any)._app === null
+      const keyHandlerReleased = (renderer as any)._keyHandler === null
+      const resizeObserverReleased = (renderer as any)._resizeObserver === null
+      const canvasOwnershipReleased = !(MermaidRenderer as any)._liveCanvases.has(probeCanvas)
+      mark('fields:read')
+
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true }))
+      probeCanvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true }))
+      mark('keydown:dispatched')
+
+      const keydownListenersReleased = windowTracker.liveCount() === 0 && canvasTracker.liveCount() === 0
+
+      let remountSucceeded = false
+      let remountNodeCount = 0
+      const second = new MermaidRenderer()
+      try {
+        mark('remount:start')
+        await withTimeout(second.mount(probeCanvas), 'remount after aborted mount')
+        mark('remount:mounted')
+        await withTimeout(second.load(source), 'load after aborted mount')
+        mark('remount:loaded')
+        remountSucceeded = true
+        remountNodeCount = (second as any)._nodeSprites.size as number
+      } finally {
+        second.destroy()
+        mark('remount:destroyed')
+      }
+
+      const result = {
+        mountErrorMessage,
+        appReleased,
+        keyHandlerReleased,
+        resizeObserverReleased,
+        canvasOwnershipReleased,
+        keydownListenersReleased,
+        fitCallsAfterKeydown,
+        remountSucceeded,
+        remountNodeCount,
+      }
+      setStatus(JSON.stringify(result, null, 2))
+      return result
+    } finally {
+      windowTracker.restore()
+      canvasTracker.restore()
+      renderer.destroy()
+      probeWrapper.remove()
+      if (originalGpuDescriptor) {
+        Object.defineProperty(navigator, 'gpu', originalGpuDescriptor)
+      }
+    }
+  },
+  async setupKeyboardScopeProbe(): Promise<void> {
+    teardownKeyboardScope()
+
+    const gpuDescriptor = Object.getOwnPropertyDescriptor(navigator, 'gpu') ?? null
+    try {
+      Object.defineProperty(navigator, 'gpu', {
+        configurable: true,
+        value: undefined,
+      })
+    } catch {
+      // ignore if the browser does not let us override this property
+    }
+
+    const canvas = document.getElementById('canvas-a') as HTMLCanvasElement
+    const editor = document.createElement('div')
+    editor.id = 'keyboard-probe-editor'
+    editor.setAttribute('contenteditable', 'true')
+    editor.textContent = 'editable host'
+    editor.style.position = 'fixed'
+    editor.style.right = '16px'
+    editor.style.bottom = '16px'
+    editor.style.width = '280px'
+    editor.style.minHeight = '48px'
+    editor.style.padding = '8px'
+    editor.style.background = '#f9fafb'
+    editor.style.color = '#111827'
+    editor.style.zIndex = '10'
+    document.body.appendChild(editor)
+
+    const renderer = new MermaidRenderer()
+    const counts = { fit: 0, reset: 0 }
+    keyboardScopeState = { renderer, editor, counts, gpuDescriptor }
+
+    await withTimeout(renderer.mount(canvas), 'keyboard scope mount')
+    renderer.loadGraph({
+      nodes: new Map([
+        ['A', { id: 'A', label: 'Start', shape: 'rectangle', metadata: {} }],
+        ['B', { id: 'B', label: 'Done', shape: 'rectangle', metadata: {} }],
+      ]),
+      edges: [{ id: 'A->B', source: 'A', target: 'B', style: 'solid' as const }],
+      subgraphs: new Map(),
+      directives: [],
+      direction: 'TD',
+      diagramType: 'flowchart' as const,
+    })
+
+    const originalFit = renderer.fitToView.bind(renderer)
+    ;(renderer as any).fitToView = () => {
+      counts.fit += 1
+      originalFit()
+    }
+    const originalReset = renderer.resetView.bind(renderer)
+    ;(renderer as any).resetView = () => {
+      counts.reset += 1
+      originalReset()
+    }
+
+    setStatus('keyboard scope probe ready')
+  },
+  getKeyboardScopeCounts(): KeyboardScopeCounts {
+    if (!keyboardScopeState) {
+      throw new Error('keyboard scope probe is not active')
+    }
+    const active = document.activeElement
+    return {
+      fitCalls: keyboardScopeState.counts.fit,
+      resetCalls: keyboardScopeState.counts.reset,
+      editorText: keyboardScopeState.editor.textContent ?? '',
+      activeElementId: active instanceof HTMLElement ? (active.id || active.tagName.toLowerCase()) : 'none',
+    }
+  },
+  focusKeyboardScopeCanvas(): boolean {
+    const canvas = document.getElementById('canvas-a') as HTMLCanvasElement
+    canvas.focus()
+    return document.activeElement === canvas
+  },
+  teardownKeyboardScopeProbe(): void {
+    teardownKeyboardScope()
+    setStatus('keyboard scope probe torn down')
   },
   async runContextRecovery(): Promise<ContextRecoveryResult> {
     const originalGpuDescriptor = Object.getOwnPropertyDescriptor(navigator, 'gpu')

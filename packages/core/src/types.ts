@@ -1,3 +1,5 @@
+import type { RichLabel } from './label-markup'
+
 // ─── Primitive type aliases ──────────────────────────────────────────────────
 
 export type NodeShape =
@@ -19,9 +21,15 @@ export type ThemeMode = 'system' | 'dark' | 'light'
 
 export type DiagramType =
   | 'flowchart'
+  | 'erDiagram'
   | 'classDiagram'
   | 'c4'
   | 'stateDiagram'
+  | 'sequenceDiagram'
+  | 'requirementDiagram'
+  | 'mindmap'
+  | 'gantt'
+  | 'journey'
   | 'unknown'
 
 // ─── Graph model ─────────────────────────────────────────────────────────────
@@ -29,8 +37,11 @@ export type DiagramType =
 export interface RenderNode {
   id: string
   label: string
+  labelMarkup?: RichLabel
   shape: NodeShape
   metadata: Record<string, unknown>
+  classes?: string[]
+  style?: RenderStyle
 }
 
 export interface RenderEdge {
@@ -39,6 +50,8 @@ export interface RenderEdge {
   target: string
   style: EdgeStyle
   label?: string
+  metadata?: Record<string, unknown>
+  renderStyle?: RenderStyle
 }
 
 export interface RenderSubgraph {
@@ -46,6 +59,9 @@ export interface RenderSubgraph {
   label: string
   nodeIds: string[]
   collapsed: boolean
+  direction?: string
+  classes?: string[]
+  style?: RenderStyle
 }
 
 export interface RenderGraph {
@@ -55,6 +71,42 @@ export interface RenderGraph {
   directives: Directive[]
   direction: string
   diagramType: DiagramType
+}
+
+export interface RenderedNodeAnchor {
+  id: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface RenderedEdgeAnchor {
+  id: string
+  source: string
+  target: string
+  x: number
+  y: number
+}
+
+export interface RenderedSubitemAnchor {
+  id: string
+  parentKind: 'node' | 'edge'
+  parentId: string
+  itemKind: string
+  label: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface RenderStyle {
+  fill?: number
+  stroke?: number
+  text?: number
+  strokeWidth?: number
+  strokeDasharray?: number[]
 }
 
 // ─── Cross-file linking ──────────────────────────────────────────────────────
@@ -90,6 +142,35 @@ export interface LinkState {
   warningCode?: string
 }
 
+export type DirectiveMetadataValue = string | boolean | string[]
+export type DirectiveMetadata = Record<string, DirectiveMetadataValue>
+
+export interface EntityDirective {
+  type: 'entity'
+  nodeId: string
+  entityType: string
+  entityId: string
+  metadata: DirectiveMetadata
+}
+
+export interface EdgeDirective {
+  type: 'edge'
+  source: string
+  target: string
+  metadata: DirectiveMetadata
+}
+
+export interface FileDirective {
+  type: 'file'
+  metadata: DirectiveMetadata
+}
+
+export interface LensDirective {
+  type: 'lens'
+  name: string
+  metadata: DirectiveMetadata
+}
+
 export interface LayoutDirective {
   type: 'layout'
   philosophy: LayoutPhilosophy
@@ -116,10 +197,70 @@ export interface SpacingDirective {
 
 export type Directive =
   | LinkDirective
+  | EntityDirective
+  | EdgeDirective
+  | FileDirective
+  | LensDirective
   | LayoutDirective
   | PinDirective
   | RankDirective
   | SpacingDirective
+
+// ─── Project index ──────────────────────────────────────────────────────────
+
+export interface ProjectNodeOccurrence {
+  file: string
+  nodeId: string
+  label: string
+  entityKey?: string
+  metadata: Record<string, unknown>
+}
+
+export interface ProjectEdgeOccurrence {
+  file: string
+  edgeId: string
+  source: string
+  target: string
+  label?: string
+  metadata: Record<string, unknown>
+}
+
+export interface ProjectLinkOccurrence {
+  file: string
+  nodeId: string
+  rawTargetFile: string
+  targetNode?: string
+  canonicalTargetFile?: string
+  status: 'valid' | 'broken' | 'unvalidated'
+  reason?: string
+  warningCode?: string
+}
+
+export interface ProjectFileIndex {
+  file: string
+  success: boolean
+  graph?: RenderGraph
+  warnings: ProjectIndexWarning[]
+  errors: ProjectIndexError[]
+}
+
+export interface ProjectIndexWarning extends RenderWarning {
+  file: string
+}
+
+export interface ProjectIndexError extends RenderError {
+  file: string
+}
+
+export interface ProjectIndex {
+  files: Map<string, ProjectFileIndex>
+  nodesById: Map<string, ProjectNodeOccurrence[]>
+  entities: Map<string, ProjectNodeOccurrence[]>
+  edgesBySignature: Map<string, ProjectEdgeOccurrence[]>
+  links: ProjectLinkOccurrence[]
+  warnings: ProjectIndexWarning[]
+  errors: ProjectIndexError[]
+}
 
 // ─── Positioned (layout output) ─────────────────────────────────────────────
 
@@ -203,9 +344,11 @@ export interface ThemeOverrides {
   hoverGlow?: number
   hoverGlowAlpha?: number
   accent?: number
+  commentAccent?: number
   strokeWidth?: number
   cornerRadius?: number
   dimmedAlpha?: number
+  hoverDimmedAlpha?: number
   messageOverlayBg?: number
   messageTitle?: string
   messageBody?: string
@@ -219,10 +362,87 @@ export interface MermaidRendererOptions {
   themeOverrides?: ThemeOverrides
 }
 
+export interface MermaidViewportState {
+  x: number
+  y: number
+  zoom: number
+}
+
+export type MermaidViewSpec =
+  | { kind: 'full' }
+  | { kind: 'subgraph'; id: string; boundaryDepth?: 1 }
+  | { kind: 'lens'; name: string | null }
+
 // ─── Interaction events ──────────────────────────────────────────────────────
 
 export interface NodeEvent {
   nodeId: string
   eventType: 'click' | 'hover' | 'dblclick' | 'contextmenu'
+  originalEvent?: Event
+}
+
+export interface EdgeEvent {
+  edgeId: string
+  source: string
+  target: string
+  eventType: 'click' | 'hover' | 'contextmenu'
+  originalEvent?: Event
+}
+
+export interface SubitemEvent {
+  id: string
+  parentKind: 'node' | 'edge'
+  parentId: string
+  itemKind: string
+  label: string
+  eventType: 'click' | 'hover' | 'contextmenu'
+  originalEvent?: Event
+}
+
+// ─── Callout badges ──────────────────────────────────────────────────────────
+
+export type CalloutAnchorKind = 'node' | 'subgraph' | 'edge'
+
+/**
+ * What an annotation marker represents. Both kinds share one mechanism (a
+ * badge child of the anchor's sprite, host-routed hit testing, the same
+ * `callout:*` events); the kind selects the accent colour and lets an anchor
+ * carry one marker of EACH kind side by side without overlap.
+ *
+ * - `'callout'` — a callout/annotation card attached to the anchor.
+ * - `'comment'` — a Figma-style comment thread pin on the anchor.
+ */
+export type CalloutBadgeKind = 'callout' | 'comment'
+
+/**
+ * One in-canvas annotation marker, keyed by the anchor (and kind) it belongs
+ * to. Pushed via `MermaidRenderer.setCalloutBadges` and rendered by the
+ * engine as a child of the anchor's sprite so it moves/scales with its
+ * anchor by construction.
+ */
+export interface CalloutBadgeSpec {
+  anchorKind: CalloutAnchorKind
+  anchorId: string
+  /** Marker kind; omitted means `'callout'` (backwards compatible). */
+  kind?: CalloutBadgeKind
+  /** Optional annotation count shown inside the badge when greater than 1. */
+  count?: number
+}
+
+/**
+ * Payload for `callout:click` / `callout:hover` / `callout:hoverend`.
+ * `x`/`y` are the badge centre in canvas-relative screen coordinates at the
+ * moment of the event — the same space as `getNodeAnchors` rects — so hosts
+ * can open a DOM detail panel at the badge without tracking it continuously.
+ * `kind` discriminates which marker on the anchor the event refers to.
+ */
+export interface CalloutBadgeEvent {
+  anchorKind: CalloutAnchorKind
+  anchorId: string
+  kind: CalloutBadgeKind
+  count?: number
+  eventType: 'click' | 'hover' | 'hoverend'
+  x: number
+  y: number
   originalEvent?: Event
 }

@@ -14,6 +14,10 @@ export interface ViewportTarget {
   zoom: number
 }
 
+export interface FitToBoundsOptions {
+  minZoom?: number
+}
+
 /**
  * Viewport container that supports zoom (wheel) and pan (drag on empty space).
  * Zoom targets the cursor position so the point under the cursor stays fixed.
@@ -116,7 +120,7 @@ export class Viewport extends Container {
    * Scale and centre the viewport so an arbitrary world-space bounds rectangle
    * fits within the canvas.
    */
-  fitToBounds(minX: number, minY: number, maxX: number, maxY: number): void {
+  fitToBounds(minX: number, minY: number, maxX: number, maxY: number, options: FitToBoundsOptions = {}): void {
     const contentWidth = maxX - minX
     const contentHeight = maxY - minY
     if (!this._canvas || contentWidth <= 0 || contentHeight <= 0) return
@@ -127,11 +131,9 @@ export class Viewport extends Container {
     const scaleX = (cw - padding * 2) / contentWidth
     const scaleY = (ch - padding * 2) / contentHeight
     const fitZoom = Math.min(scaleX, scaleY, MAX_ZOOM)
+    const minZoom = Math.max(MIN_ZOOM, Math.min(options.minZoom ?? MIN_ZOOM, MAX_ZOOM))
 
-    // Below this, labels counter-scale enough that dense diagrams become
-    // visually stacked. Prefer readable initial scale and let users pan.
-    const minReadableZoom = cw < 700 ? 0.32 : 0.5
-    this._zoom = Math.max(fitZoom, minReadableZoom)
+    this._zoom = Math.max(fitZoom, minZoom)
     this.scale.set(this._zoom)
 
     const scaledWidth = contentWidth * this._zoom
@@ -261,6 +263,29 @@ export class Viewport extends Container {
     this.y = 0
     this.onZoomChange?.(this._zoom)
     this.onActivity?.()
+  }
+
+  getState(): ViewportTarget {
+    return { x: this.x, y: this.y, zoom: this._zoom }
+  }
+
+  restoreState(state: ViewportTarget): boolean {
+    if (
+      !Number.isFinite(state.x) ||
+      !Number.isFinite(state.y) ||
+      !Number.isFinite(state.zoom) ||
+      state.zoom <= 0
+    ) {
+      return false
+    }
+    this._stopAnimation()
+    this.x = state.x
+    this.y = state.y
+    this._zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, state.zoom))
+    this.scale.set(this._zoom)
+    this.onZoomChange?.(this._zoom)
+    this.onActivity?.()
+    return true
   }
 
   /**

@@ -23,6 +23,8 @@ Nodes that are part of the same sequential flow move in the same direction. A to
 
 Dagre + flow lanes. Detect longest path = center lane. Decision nodes split: Yes->right lane, No->left lane. After merge, return to center.
 
+Lanes run parallel to the flow axis: vertical flows (TD/BT) keep dagre's rank progression on y and constrain x into lane columns; horizontal flows (LR/RL) keep dagre's rank progression on x and constrain y into lane rows.
+
 Current v1 shipped behavior includes one important fallback: when a graph has many subgraphs and the lane metaphor stops making sense, the runtime falls back to the shared Dagre path instead of forcing narrative lanes onto a broad overview map.
 
 - **Single dominant axis.** The main path flows along one direction (TD or LR). No switching mid-diagram.

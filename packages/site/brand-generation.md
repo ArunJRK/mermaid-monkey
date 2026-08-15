@@ -6,9 +6,9 @@ Generated with `higgsfield generate create imagegen_2_0` on 2026-05-30.
 
 - Mascot-led hero: chosen because the character is the differentiator and the third candidate clearly interacts with graph nodes.
 - Demo theme set: Narrative and Blueprint only, because those are the two real v1 layout engines. The other philosophy names are not advertised as dedicated layouts on the landing page.
-- Site tech: vanilla HTML, CSS, and TypeScript on Vite in `packages/site`, reusing the same `@mermaid-render/core` public API as the demo harness.
+- Site tech: vanilla HTML, CSS, and TypeScript on Vite in `packages/site`, reusing the same `@mermaid-monkey/core` public API as the demo harness.
 - Site location: workspace package at `packages/site`, deployed by GitHub Pages Actions from its static build output.
-- Domain: GitHub Pages default subpath, canonical `https://arunjrk.github.io/mermaid-render/`.
+- Domain: GitHub Pages default subpath, canonical `https://arunjrk.github.io/mermaid-monkey/`.
 
 ## Chosen Assets
 

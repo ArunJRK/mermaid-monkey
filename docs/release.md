@@ -2,7 +2,7 @@
 
 This repo ships two v1 artifacts from the current goal scope:
 
-1. `@mermaid-render/core` as a public npm package
+1. `@mermaid-monkey/core` as a public npm package
 2. `packages/core/dist-demo/` as a static web app
 
 ## Core Release Verification
@@ -28,13 +28,13 @@ That gate runs:
 
 Latest verified current-tree result:
 
-- unit tests: `142` passed
-- browser tests: `83` passed
+- unit tests: `152` passed
+- browser tests: `84` passed; `1` pre-existing mid-relayout screenshot flake on the verifying darwin machine (fails identically on the unchanged `1.0.1` tree and passes when run in isolation)
 - built static demo smoke test: passed
-- core ESM: `202.86 KiB`
-- core CJS: `205.14 KiB`
-- demo entry: `478.38 KiB` raw / `137.53 KiB` gzip
-- dry-run tarball: `mermaid-render-core-1.0.0.tgz`, package size `275.8 kB`
+- core ESM: `206.40 KiB`
+- core CJS: `208.69 KiB`
+- demo entry: `479.84 KiB` raw / `138.18 KiB` gzip
+- dry-run tarball: `mermaid-monkey-core-1.0.2.tgz`, package size `284.8 kB`
 
 GitHub Actions PR / mainline gate:
 
@@ -62,7 +62,7 @@ GitHub Actions PR / mainline gate:
 From the repo root:
 
 ```bash
-pnpm --filter @mermaid-render/core pack --pack-destination ../../artifacts
+pnpm --filter @mermaid-monkey/core pack --pack-destination ../../artifacts
 ```
 
 Or inspect the publish payload without writing a tarball:
@@ -85,7 +85,7 @@ The package is scoped and configured for public publish via:
 After building, verify the publishable core stays inside the `~330 KiB` budget and the static demo stays inside its separate release budget:
 
 ```bash
-pnpm --filter @mermaid-render/core bundle:check
+pnpm --filter @mermaid-monkey/core bundle:check
 ```
 
 This check:
@@ -94,7 +94,7 @@ This check:
 - fails if the demo entry chunk exceeds `500 KiB` raw or `160 KiB` gzip
 - prints the current measured sizes for release tracking
 
-## Publish `@mermaid-render/core`
+## Publish `@mermaid-monkey/core`
 
 After verification on the current `1.0.0` release tree:
 
@@ -113,14 +113,14 @@ Expected publish surface:
 
 Latest verified dry-run package artifact:
 
-- `mermaid-render-core-1.0.0.tgz`
+- `mermaid-monkey-core-1.0.0.tgz`
 
 ## Pack Verification in CI / Local Gate
 
 The v1 release gate also verifies that the package can be packed without publishing:
 
 ```bash
-pnpm --filter @mermaid-render/core pack:check
+pnpm --filter @mermaid-monkey/core pack:check
 ```
 
 This runs:
@@ -134,7 +134,7 @@ So the CI/release path checks the actual publish surface, not only TypeScript/bu
 ## Build the Static Demo
 
 ```bash
-pnpm --filter @mermaid-render/core build:demo
+pnpm --filter @mermaid-monkey/core build:demo
 ```
 
 Output:
@@ -146,7 +146,7 @@ packages/core/dist-demo/
 ## Preview the Static Demo Locally
 
 ```bash
-pnpm --filter @mermaid-render/core preview:demo
+pnpm --filter @mermaid-monkey/core preview:demo
 ```
 
 That command rebuilds `packages/core/dist-demo/` and serves it from a plain static HTTP server on `127.0.0.1:4173`.
@@ -154,7 +154,7 @@ That command rebuilds `packages/core/dist-demo/` and serves it from a plain stat
 The same built-artifact smoke path is also available directly:
 
 ```bash
-pnpm --filter @mermaid-render/core test:browser:static-demo
+pnpm --filter @mermaid-monkey/core test:browser:static-demo
 ```
 
 Or serve the built folder with any static file host.
@@ -164,7 +164,7 @@ Or serve the built folder with any static file host.
 There is also a focused browser gate for renderer lifecycle and backend recovery behavior:
 
 ```bash
-pnpm --filter @mermaid-render/core test:browser:lifecycle
+pnpm --filter @mermaid-monkey/core test:browser:lifecycle
 ```
 
 That focused run covers:
@@ -182,7 +182,7 @@ That focused run covers:
 There is also a focused browser gate for the relayout and animation proof surface:
 
 ```bash
-pnpm --filter @mermaid-render/core test:browser:relayout
+pnpm --filter @mermaid-monkey/core test:browser:relayout
 ```
 
 That focused run covers:
@@ -201,12 +201,12 @@ Current result on the present tree:
 
 - render-quality browser slice: `22` passed
 
-- `pnpm --filter @mermaid-render/core test:browser:relayout` -> `9` passed
+- `pnpm --filter @mermaid-monkey/core test:browser:relayout` -> `9` passed
 
 There is also a focused mixed unit + browser gate for the spring/runtime animation contract:
 
 ```bash
-pnpm --filter @mermaid-render/core test:animation
+pnpm --filter @mermaid-monkey/core test:animation
 ```
 
 That command covers:
@@ -223,7 +223,7 @@ Current result on the present tree:
 There is also a focused mixed unit + browser gate for the theme and emphasis contract:
 
 ```bash
-pnpm --filter @mermaid-render/core test:theme
+pnpm --filter @mermaid-monkey/core test:theme
 ```
 
 That command covers:
@@ -243,7 +243,7 @@ Current result on the present tree:
 There is also a focused mixed unit + browser gate for the cross-file linking and preview contract:
 
 ```bash
-pnpm --filter @mermaid-render/core test:linking
+pnpm --filter @mermaid-monkey/core test:linking
 ```
 
 That command covers:
@@ -266,7 +266,7 @@ Current result on the present tree:
 There is also a focused browser gate for the render-quality and viewport contract:
 
 ```bash
-pnpm --filter @mermaid-render/core test:render-quality
+pnpm --filter @mermaid-monkey/core test:render-quality
 ```
 
 That command covers:
@@ -287,7 +287,7 @@ Current result on the present tree:
 There is also a focused browser + built-artifact gate for the web/demo surface:
 
 ```bash
-pnpm --filter @mermaid-render/core test:web
+pnpm --filter @mermaid-monkey/core test:web
 ```
 
 That command covers:
@@ -309,7 +309,7 @@ Current result on the present tree:
 There is also a focused browser gate for performance and stress-mode behavior:
 
 ```bash
-pnpm --filter @mermaid-render/core test:performance
+pnpm --filter @mermaid-monkey/core test:performance
 ```
 
 That command covers:
@@ -330,7 +330,7 @@ Current result on the present tree:
 There is also a focused ship-surface gate for release artifacts:
 
 ```bash
-pnpm --filter @mermaid-render/core test:ship
+pnpm --filter @mermaid-monkey/core test:ship
 ```
 
 That command covers:
@@ -350,7 +350,7 @@ Current result on the present tree:
   - core ESM: `201.94 KiB`
   - core CJS: `204.23 KiB`
   - demo entry: `478.38 KiB` raw / `137.53 KiB` gzip
-  - dry-run tarball: `mermaid-render-core-1.0.0.tgz`, package size `277.8 kB`
+  - dry-run tarball: `mermaid-monkey-core-1.0.0.tgz`, package size `277.8 kB`
 
 Current environment expectation:
 

@@ -1,4 +1,4 @@
-# Design Spec: mermaid-render
+# Design Spec: mermaid-monkey
 
 **Date:** 2026-03-28
 **Status:** Draft
@@ -18,8 +18,8 @@ These are the most upvoted open issues in the Mermaid repo, unresolved for years
 
 A standalone rendering engine that takes Mermaid's AST and renders it to an interactive WebGL canvas. Two packages:
 
-1. **@mermaid-render/core** — framework-agnostic npm library
-2. **@mermaid-render/vscode** — VS Code extension (first consumer)
+1. **@mermaid-monkey/core** — framework-agnostic npm library
+2. **@mermaid-monkey/vscode** — VS Code extension (first consumer)
 
 ## 3. Architecture
 
@@ -33,7 +33,7 @@ A standalone rendering engine that takes Mermaid's AST and renders it to an inte
           │               │               │
           ▼               ▼               ▼
 ┌─────────────────────────────────────────────────┐
-│              @mermaid-render/core                 │
+│              @mermaid-monkey/core                 │
 │                                                   │
 │  ┌───────────┐  ┌──────────┐  ┌───────────────┐ │
 │  │  Parser    │  │  Layout  │  │   Renderer    │ │
@@ -227,7 +227,7 @@ interface NodeEvent {
 ### 4.2 Renderer Panel
 
 - VS Code WebviewPanel
-- Loads @mermaid-render/core in the webview
+- Loads @mermaid-monkey/core in the webview
 - Watches file for changes, hot-reloads on save
 - Handles `link:navigate` events by opening the target file
 
@@ -305,7 +305,7 @@ Other Mermaid types (sequence, Gantt, pie, git, journey) are lower priority and 
 ## 8. Project Structure
 
 ```
-mermaid-render/
+mermaid-monkey/
 ├── packages/
 │   ├── core/
 │   │   ├── src/

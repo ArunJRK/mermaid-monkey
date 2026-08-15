@@ -48,7 +48,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright Chromium
-        run: pnpm --filter @mermaid-render/core exec playwright install --with-deps chromium
+        run: pnpm --filter @mermaid-monkey/core exec playwright install --with-deps chromium
 
       - name: Verify core
         run: pnpm verify:core

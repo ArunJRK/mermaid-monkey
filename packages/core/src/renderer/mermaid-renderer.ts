@@ -1,15 +1,26 @@
 import { Application, BitmapText, Container, Graphics } from 'pixi.js'
 import type {
+  CalloutAnchorKind,
+  CalloutBadgeEvent,
+  CalloutBadgeKind,
+  CalloutBadgeSpec,
   LoadResult,
   LoadOptions,
   RenderGraph,
   PositionedGraph,
   NodeEvent,
+  EdgeEvent,
+  SubitemEvent,
   LinkDirective,
   LayoutDirective,
   LinkState,
   RenderWarning,
   MermaidRendererOptions,
+  MermaidViewSpec,
+  MermaidViewportState,
+  RenderedEdgeAnchor,
+  RenderedNodeAnchor,
+  RenderedSubitemAnchor,
   ThemeMode,
 } from '../types'
 import type { FederatedPointerEvent } from 'pixi.js'
@@ -17,12 +28,18 @@ import { LoadPipeline, createLayoutEngine } from './load-pipeline'
 import { EventEmitter } from './event-emitter'
 import { Viewport } from './viewport'
 import { NodeSprite } from './node-sprite'
+import type { CalloutBadgeState } from './callout-badge'
 import { EdgeGraphic } from './edge-graphic'
 import { SubgraphContainer } from './subgraph-container'
 import { FoldManager } from '../interaction/fold-manager'
-import { mapKeyToAction } from '../interaction/keyboard'
+import { isEditableShortcutTarget, mapKeyToAction } from '../interaction/keyboard'
 import { NarrativeLayout } from '../layout/narrative-layout'
 import { resolveTheme, type Theme } from './theme'
+import {
+  evaluateGraphLenses,
+  type LensEvaluation,
+  type LensSummary,
+} from '../lens-evaluator'
 import { LinkPreview } from './link-preview'
 import { WireRegistry } from './wire-registry'
 import { drawWireHops } from './wire-hops'
@@ -35,10 +52,31 @@ import { lineIntersectsRect } from '../layout/blueprint-layout'
 const IDLE_TICKER_TIMEOUT_MS = 220
 const RELAYOUT_MOTION_DURATION_MS = 220
 
+/**
+ * A resize whose viewport area grows or shrinks by at least this factor in a
+ * single settled step is "drastic" (fullscreen toggle, pane reveal) and
+ * refits the diagram; anything smaller is an incidental host layout change
+ * that must preserve the user's pan and zoom.
+ */
+const DRASTIC_RESIZE_AREA_RATIO = 2
+
+function isDrasticCanvasResize(
+  previous: { width: number; height: number } | null,
+  next: { width: number; height: number },
+): boolean {
+  if (!previous) return false
+  if (next.width <= 0 || next.height <= 0) return false
+  const previousArea = previous.width * previous.height
+  if (previousArea <= 0) return true
+  const ratio = (next.width * next.height) / previousArea
+  return ratio >= DRASTIC_RESIZE_AREA_RATIO || ratio <= 1 / DRASTIC_RESIZE_AREA_RATIO
+}
+
 type PerformanceMode = 'normal' | 'stress'
+type SelectionOptions = { additive?: boolean }
 
 /**
- * Public API for the mermaid-render engine.
+ * Public API for the mermaid-monkey engine.
  *
  * Composes: LoadPipeline + PixiJS Application + Viewport + FoldManager + EventEmitter
  */
@@ -55,6 +93,8 @@ export class MermaidRenderer {
   private _positioned: PositionedGraph | null = null
   private _renderedBounds: { minX: number; minY: number; maxX: number; maxY: number } | null = null
   private _selectedNodeId: string | null = null
+  private _selectedNodeIds = new Set<string>()
+  private _selectedEdgeIds = new Set<string>()
   private _nodeSprites = new Map<string, NodeSprite>()
   private _edgeGraphics: EdgeGraphic[] = []
   private _subgraphContainers = new Map<string, SubgraphContainer>()
@@ -64,11 +104,16 @@ export class MermaidRenderer {
   private _spineNodeIds: Set<string> = new Set()
   private _busGraphics = new Map<string, Graphics>() // Blueprint: source ID → bus graphic
   private _busSourceIds = new Set<string>() // sources that were merged into bus lines
+  private _blueprintGridGfx: Graphics | null = null // Blueprint: persistent grid background
   private _linkPreview: LinkPreview | null = null
   private _linkStates = new Map<string, LinkState>()
   private _messageOverlay: Container | null = null
   private _performanceMode: PerformanceMode = 'normal'
   private _hoveredNodeId: string | null = null
+  private _hoveredEdgeId: string | null = null
+  private _lenses: LensEvaluation[] = []
+  private _activeLensName: string | null = null
+  private _calloutBadges: CalloutBadgeSpec[] = []
 
   // Focus navigation state
   private _focusStack: string[] = []
@@ -87,7 +132,9 @@ export class MermaidRenderer {
   private _pointerActivityHandler: ((event: Event) => void) | null = null
   private _resizeObserver: ResizeObserver | null = null
   private _resizeRafId: number | null = null
+  private _canvasTabIndexAdded = false
   private _lastObservedCanvasSize: { width: number; height: number } | null = null
+  private _lastSettledCanvasSize: { width: number; height: number } | null = null
   private _colorSchemeMediaQuery: MediaQueryList | null = null
   private _colorSchemeChangeHandler: ((event: MediaQueryListEvent) => void) | null = null
   private _idleTickerTimeoutId: number | null = null
@@ -108,6 +155,10 @@ export class MermaidRenderer {
 
   /**
    * Initialise PixiJS and attach to the given canvas element.
+   *
+   * If destroy() is called while mount() is still awaiting GPU setup,
+   * mount() aborts: it tears down whatever it had created, releases canvas
+   * ownership, and resolves without mounting.
    */
   async mount(canvas: HTMLCanvasElement): Promise<void> {
     if (this._destroyed) {
@@ -134,6 +185,12 @@ export class MermaidRenderer {
       }
     }
 
+    // destroy() may have been called while awaiting the adapter probe.
+    if (this._destroyed) {
+      await this._abortInFlightMount(canvas, null)
+      return
+    }
+
     const app = new Application()
     try {
       await app.init({
@@ -147,6 +204,10 @@ export class MermaidRenderer {
       })
     } catch (error) {
       MermaidRenderer._liveCanvases.delete(canvas)
+      if (this._destroyed) {
+        this._canvas = null
+        return
+      }
       this._canvas = canvas
       const message = `Rendering unavailable: ${
         error instanceof Error ? error.message : String(error)
@@ -154,13 +215,20 @@ export class MermaidRenderer {
       this._drawUnavailableState(message)
       throw new Error(message)
     }
+
+    // destroy() may have been called while the GPU context was initialising.
+    if (this._destroyed) {
+      await this._abortInFlightMount(canvas, app)
+      return
+    }
+
     this._app = app
     this._wireColorSchemeUpdates()
     this._wireResizeHandling(canvas)
 
     // Log which renderer backend is active
     const rendererType = app.renderer.type === 0x1 ? 'WebGL' : app.renderer.type === 0x2 ? 'WebGPU' : 'Unknown'
-    console.log(`[mermaid-render] GPU backend: ${rendererType}`)
+    console.log(`[mermaid-monkey] GPU backend: ${rendererType}`)
     this._wireRuntimeLifecycle(app, canvas, rendererType)
 
     // Create viewport as root container
@@ -199,18 +267,23 @@ export class MermaidRenderer {
       }
     })
 
-    // Keyboard shortcuts
+    // Keyboard shortcuts — scoped to the canvas (not the window) so embedding
+    // hosts such as rich-text editors keep their own keystrokes. The canvas is
+    // made focusable so it can receive keydown once the user interacts with it.
+    if (!canvas.hasAttribute('tabindex')) {
+      canvas.tabIndex = 0
+      this._canvasTabIndexAdded = true
+    }
     this._keyHandler = (e: KeyboardEvent) => {
-      // Don't intercept when typing in inputs
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      // Don't intercept typing in form controls or contenteditable hosts
+      if (isEditableShortcutTarget(e.target)) return
 
       const action = mapKeyToAction(e.key)
       if (action === 'fitToView') this.fitToView()
       else if (action === 'resetView') this.resetView()
       else if (action === 'focusOut') this.focusOut()
     }
-    window.addEventListener('keydown', this._keyHandler)
+    canvas.addEventListener('keydown', this._keyHandler)
 
     // Link preview popup — rendered inside the same PixiJS app (no second WebGL context)
     this._linkPreview = new LinkPreview(app)
@@ -227,9 +300,13 @@ export class MermaidRenderer {
 
     // Keyboard
     if (this._keyHandler) {
-      window.removeEventListener('keydown', this._keyHandler)
+      this._canvas?.removeEventListener('keydown', this._keyHandler)
       this._keyHandler = null
     }
+    if (this._canvas && this._canvasTabIndexAdded) {
+      this._canvas.removeAttribute('tabindex')
+    }
+    this._canvasTabIndexAdded = false
     if (this._webglContextLostHandler && this._canvas) {
       this._canvas.removeEventListener('webglcontextlost', this._webglContextLostHandler)
       this._webglContextLostHandler = null
@@ -251,6 +328,7 @@ export class MermaidRenderer {
       this._resizeRafId = null
     }
     this._lastObservedCanvasSize = null
+    this._lastSettledCanvasSize = null
     if (this._colorSchemeMediaQuery && this._colorSchemeChangeHandler) {
       this._colorSchemeMediaQuery.removeEventListener('change', this._colorSchemeChangeHandler)
       this._colorSchemeChangeHandler = null
@@ -270,6 +348,7 @@ export class MermaidRenderer {
     // Viewport DOM listeners
     this._viewport?.cleanup()
     this._viewport = null
+    this._blueprintGridGfx = null
 
     // PixiJS
     if (this._app) {
@@ -298,7 +377,13 @@ export class MermaidRenderer {
     this._busGraphics.clear()
     this._busSourceIds.clear()
     this._linkStates.clear()
+    this._calloutBadges = []
     this._focusStack = []
+    this._hoveredNodeId = null
+    this._hoveredEdgeId = null
+    this._selectedNodeId = null
+    this._selectedNodeIds.clear()
+    this._selectedEdgeIds.clear()
     this._runtimeActivityReasons.clear()
     this._resumeTickerOnVisible = false
   }
@@ -339,6 +424,10 @@ export class MermaidRenderer {
       }
 
       this._graph = result.graph
+      this._lenses = evaluateGraphLenses(result.graph)
+      if (!this._lenses.some((lens) => lens.name === this._activeLensName)) {
+        this._activeLensName = null
+      }
       this._positioned = result.positioned
       this._foldManager = new FoldManager(result.graph)
       this._linkStates = result.linkStates ?? new Map()
@@ -392,10 +481,14 @@ export class MermaidRenderer {
   loadGraph(graph: RenderGraph): void {
     this._assertUsable('loadGraph')
     this._graph = graph
+    this._lenses = evaluateGraphLenses(graph)
+    if (!this._lenses.some((lens) => lens.name === this._activeLensName)) {
+      this._activeLensName = null
+    }
     this._foldManager = new FoldManager(graph)
     this._linkStates = new Map()
 
-    const layout = createLayoutEngine(this._currentPhilosophy)
+    const layout = createLayoutEngine(this._currentPhilosophy, graph)
     this._positioned = layout.compute(graph)
     this._focusStack = []
     this._renderGraph(this._positioned)
@@ -473,7 +566,6 @@ export class MermaidRenderer {
     const sg = this._graph.subgraphs.get(focusedId)
     if (!sg) return
 
-    const theme = this._getActiveTheme()
     const focusedNodeIds = new Set(sg.nodeIds)
 
     // Build a mini-graph with just this subgraph's nodes
@@ -537,102 +629,9 @@ export class MermaidRenderer {
       subgraphs: new Map(), // No subgraphs in focused view
     }
 
-    const layout = createLayoutEngine(this._currentPhilosophy)
+    const layout = createLayoutEngine(this._currentPhilosophy, miniGraph)
     const positioned = layout.compute(miniGraph)
-    this._renderedBounds = this._computeRenderedBounds(positioned)
-    const isBlueprint = this._currentPhilosophy === 'blueprint'
-
-    // Clear and render
-    this._viewport.removeChildren()
-    this._nodeSprites.clear()
-    this._edgeGraphics = []
-    this._subgraphContainers.clear()
-    this._busGraphics.clear()
-    this._busSourceIds.clear()
-
-    // Blueprint: create wire registry and draw bus lines
-    let edgesToRender = positioned.edges
-    let wireReg: WireRegistry | undefined
-    if (isBlueprint && this._graph) {
-      wireReg = new WireRegistry((theme as any).gridSize ?? 20)
-      wireReg.registerNodeObstacles(positioned.nodes, undefined, true)
-
-      const edgeCounts = new Map<string, number>()
-      for (const e of positioned.edges) {
-        edgeCounts.set(e.source, (edgeCounts.get(e.source) ?? 0) + 1)
-      }
-      const busSourceIds = new Set<string>()
-      for (const [src, count] of edgeCounts) {
-        if (count >= 2) busSourceIds.add(src)
-      }
-      this._busSourceIds = busSourceIds
-      this._drawBlueprintBusLines(positioned, theme, busSourceIds, wireReg)
-      edgesToRender = positioned.edges.filter(e => !busSourceIds.has(e.source))
-    }
-
-    // Draw edges — pass all nodes for Blueprint collision avoidance
-    let edgeIdx = 0
-    for (const edge of edgesToRender) {
-      const eg = new EdgeGraphic(edge, theme, positioned.nodes, this._currentPhilosophy, edgeIdx, edgesToRender.length, undefined, wireReg); edgeIdx++
-      this._edgeGraphics.push(eg)
-      this._viewport.addChild(eg)
-    }
-
-    // Blueprint: wire crossing hops — drawn after all edges so we can detect crossings
-    if (isBlueprint) {
-      const edgeSegments = this._edgeGraphics
-        .filter(eg => eg.orthogonalSegments != null)
-        .map(eg => ({ edgeId: eg.data.id, segments: eg.orthogonalSegments! }))
-      // Include bus line segments
-      for (const [srcId, busGfx] of this._busGraphics) {
-        const segs: WireSegment[] = (busGfx as any)._wireSegments ?? []
-        if (segs.length > 0) {
-          edgeSegments.push({ edgeId: `bus:${srcId}`, segments: segs })
-        }
-      }
-      if (edgeSegments.length > 0) {
-        const hopGraphic = drawWireHops(edgeSegments, theme)
-        this._viewport.addChild(hopGraphic)
-      }
-    }
-
-    // Determine font name based on philosophy
-    const fontName = isBlueprint ? 'MermaidBlueprint' : 'MermaidNode'
-
-    // Nodes
-    for (const [id, node] of positioned.nodes) {
-      const isStub = id.startsWith('_stub_')
-      const sprite = new NodeSprite(node, theme, false, fontName)
-
-      // Stubs are faded
-      if (isStub) {
-        sprite.alpha = 0.4
-      }
-
-      this._nodeSprites.set(id, sprite)
-      this._viewport.addChild(sprite)
-
-      // Click on stub navigates back or to the source subgraph
-      if (!isStub) {
-        sprite.on('pointertap', (e: FederatedPointerEvent) => {
-          this._emitter.emit('node:click', {
-            nodeId: id,
-            eventType: 'click',
-            originalEvent: e.nativeEvent as Event | undefined,
-          })
-          this.selectNode(id)
-        })
-      }
-    }
-
-    this._emitEdgeNodeCrossingWarning(positioned)
-
-    // Fit the focused content
-    this.fitToView()
-    if (this._viewport) {
-      this._updateDetailLevel(this._viewport._zoom)
-    }
-    this._applyPerformanceModeDetails()
+    this._renderGraph(positioned)
   }
 
   // ── Philosophy ───────────────────────────────────────────
@@ -700,34 +699,134 @@ export class MermaidRenderer {
     this._relayout()
   }
 
+  getLenses(): LensSummary[] {
+    return this._lenses.map((lens) => ({
+      name: lens.name,
+      criteria: [...lens.criteria],
+      matchedNodeCount: lens.matchedNodeIds.length,
+      matchedEdgeCount: lens.matchedEdgeIds.length,
+    }))
+  }
+
+  getActiveLens(): string | null {
+    return this._activeLensName
+  }
+
+  setLens(name: string | null): boolean {
+    if (name !== null && !this._lenses.some((lens) => lens.name === name)) return false
+    this._activeLensName = name
+    this._applySceneOpacityState()
+    this._emitter.emit('lens:change', name)
+    return true
+  }
+
   // ── Selection ────────────────────────────────────────────
 
   /**
    * Highlight a node and emphasize its connected neighborhood.
    */
-  selectNode(id: string | null): void {
-    // Toggle: clicking same node deselects it
-    if (id !== null && id === this._selectedNodeId) {
-      id = null
+  selectNode(id: string | null, options: SelectionOptions = {}): void {
+    if (id === null) {
+      this.clearSelection()
+      return
     }
 
-    // Deselect previous
-    if (this._selectedNodeId) {
-      const prev = this._nodeSprites.get(this._selectedNodeId)
-      prev?.setSelected(false)
-    }
+    const isOnlySelectedNode = this._selectedNodeIds.size === 1
+      && this._selectedNodeIds.has(id)
+      && this._selectedEdgeIds.size === 0
 
-    this._selectedNodeId = id
-
-    if (id) {
-      const sprite = this._nodeSprites.get(id)
-      sprite?.setSelected(true)
-      if (sprite?.parent) {
-        sprite.parent.addChild(sprite)
+    if (!options.additive) {
+      if (isOnlySelectedNode) {
+        this.clearSelection()
+        return
       }
+
+      this._clearSelectedNodes()
+      this._clearSelectedEdges()
+      this._selectNodeOnly(id)
+      this._applySceneOpacityState()
+      return
+    }
+
+    if (this._selectedNodeIds.has(id)) {
+      this._selectedNodeIds.delete(id)
+      this._nodeSprites.get(id)?.setSelected(false)
+      this._selectedNodeId = Array.from(this._selectedNodeIds).at(-1) ?? null
+    } else {
+      this._selectNodeOnly(id)
     }
 
     this._applySceneOpacityState()
+  }
+
+  selectEdge(id: string | null, options: SelectionOptions = {}): void {
+    if (id === null) {
+      this.clearSelection()
+      return
+    }
+
+    const isOnlySelectedEdge = this._selectedEdgeIds.size === 1
+      && this._selectedEdgeIds.has(id)
+      && this._selectedNodeIds.size === 0
+
+    if (!options.additive) {
+      if (isOnlySelectedEdge) {
+        this.clearSelection()
+        return
+      }
+
+      this._clearSelectedNodes()
+      this._clearSelectedEdges()
+      this._selectEdgeOnly(id)
+      this._applySceneOpacityState()
+      return
+    }
+
+    if (this._selectedEdgeIds.has(id)) {
+      this._selectedEdgeIds.delete(id)
+      this._edgeGraphics.find((edge) => edge.data.id === id)?.setSelected(false)
+    } else {
+      this._selectEdgeOnly(id)
+    }
+
+    this._applySceneOpacityState()
+  }
+
+  clearSelection(): void {
+    this._clearSelectedNodes()
+    this._clearSelectedEdges()
+    this._applySceneOpacityState()
+  }
+
+  private _selectNodeOnly(id: string): void {
+    this._selectedNodeIds.add(id)
+    this._selectedNodeId = id
+    const sprite = this._nodeSprites.get(id)
+    sprite?.setSelected(true)
+    if (sprite?.parent) {
+      sprite.parent.addChild(sprite)
+    }
+  }
+
+  private _selectEdgeOnly(id: string): void {
+    this._selectedEdgeIds.add(id)
+    const edge = this._edgeGraphics.find((candidate) => candidate.data.id === id)
+    edge?.setSelected(true)
+  }
+
+  private _clearSelectedNodes(): void {
+    for (const id of this._selectedNodeIds) {
+      this._nodeSprites.get(id)?.setSelected(false)
+    }
+    this._selectedNodeIds.clear()
+    this._selectedNodeId = null
+  }
+
+  private _clearSelectedEdges(): void {
+    for (const id of this._selectedEdgeIds) {
+      this._edgeGraphics.find((edge) => edge.data.id === id)?.setSelected(false)
+    }
+    this._selectedEdgeIds.clear()
   }
 
   // ── View ─────────────────────────────────────────────────
@@ -770,11 +869,13 @@ export class MermaidRenderer {
     return true
   }
 
-  fitToView(): void {
+  fitToView(options: { preserveReadableZoom?: boolean } = {}): void {
     this._assertUsable('fitToView')
     if (this._viewport && this._renderedBounds) {
       const b = this._renderedBounds
-      this._viewport.fitToBounds(b.minX, b.minY, b.maxX, b.maxY)
+      this._viewport.fitToBounds(b.minX, b.minY, b.maxX, b.maxY, {
+        minZoom: options.preserveReadableZoom ? this._readableFitZoomFloor() : undefined,
+      })
       this._fitZoom = this._viewport._zoom
       this._touchRuntimeActivity()
     }
@@ -788,6 +889,39 @@ export class MermaidRenderer {
     this._emitBreadcrumb()
   }
 
+  getViewportState(): MermaidViewportState | null {
+    this._assertUsable('getViewportState')
+    return this._viewport?.getState() ?? null
+  }
+
+  restoreViewportState(state: MermaidViewportState): boolean {
+    this._assertUsable('restoreViewportState')
+    const restored = this._viewport?.restoreState(state) ?? false
+    if (restored) this._touchRuntimeActivity()
+    return restored
+  }
+
+  setView(view: MermaidViewSpec): boolean {
+    this._assertUsable('setView')
+    if (view.kind === 'lens') return this.setLens(view.name)
+    if (!this._graph) return false
+
+    if (view.kind === 'full') {
+      this._focusStack = []
+      if (this._positioned) this._renderGraph(this._positioned)
+      this._emitter.emit('focus:change', null, [])
+      this._emitBreadcrumb()
+      return true
+    }
+
+    if (!this._graph.subgraphs.has(view.id)) return false
+    this._focusStack = [view.id]
+    this._renderFocusedView()
+    this._emitter.emit('focus:change', view.id, [view.id])
+    this._emitBreadcrumb()
+    return true
+  }
+
   // ── Events ───────────────────────────────────────────────
 
   on(event: string, handler: (...args: unknown[]) => void): void {
@@ -796,6 +930,295 @@ export class MermaidRenderer {
 
   off(event: string, handler: (...args: unknown[]) => void): void {
     this._emitter.off(event, handler)
+  }
+
+  /**
+   * Current screen-space rectangles for rendered source-declared nodes.
+   *
+   * The ids are Mermaid source node ids. Coordinates are relative to the
+   * renderer canvas, after the active viewport zoom/pan transform, so host
+   * UIs can place DOM overlays without depending on Pixi internals.
+   */
+  getNodeAnchors(): RenderedNodeAnchor[] {
+    const anchors: RenderedNodeAnchor[] = []
+
+    for (const [id, sprite] of this._nodeSprites) {
+      if (id.startsWith('_stub_')) continue
+      const bounds = sprite.getBounds()
+      anchors.push({
+        id,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      })
+    }
+
+    return anchors
+  }
+
+  /**
+   * Current screen-space rectangles for rendered subgraph containers.
+   *
+   * Same contract as `getNodeAnchors`, keyed by Mermaid subgraph id, so hosts
+   * can anchor overlays to a cluster's full box (header included) rather than
+   * guessing a canvas fraction.
+   */
+  getSubgraphAnchors(): RenderedNodeAnchor[] {
+    const anchors: RenderedNodeAnchor[] = []
+
+    for (const [id, container] of this._subgraphContainers) {
+      const bounds = container.getBounds()
+      anchors.push({
+        id,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      })
+    }
+
+    return anchors
+  }
+
+  /**
+   * Current screen-space points for rendered source-declared edges.
+   *
+   * The ids/source/target fields match `edge:click` payloads. Coordinates are
+   * relative to the renderer canvas, after the active viewport zoom/pan
+   * transform, so host UIs can place DOM overlays for edge-level annotations.
+   */
+  getEdgeAnchors(): RenderedEdgeAnchor[] {
+    const anchors: RenderedEdgeAnchor[] = []
+
+    for (const edgeGraphic of this._edgeGraphics) {
+      const point = edgeGraphic.getAnchorPoint()
+      if (!point) continue
+      anchors.push({
+        id: edgeGraphic.data.id,
+        source: edgeGraphic.data.source,
+        target: edgeGraphic.data.target,
+        x: point.x,
+        y: point.y,
+      })
+    }
+
+    return anchors
+  }
+
+  /**
+   * Current screen-space rectangles for semantic rows inside rendered nodes,
+   * such as ER attributes and class attributes or methods.
+   */
+  getSubitemAnchors(): RenderedSubitemAnchor[] {
+    return [...this._nodeSprites.values()].flatMap((sprite) =>
+      sprite.getSemanticSubitemAnchors(),
+    )
+  }
+
+  /**
+   * Current viewport zoom factor, in the same units the anchor rects returned
+   * by `getNodeAnchors` are already transformed by.
+   *
+   * Hosts that size DOM overlays against those rects need this to keep a
+   * marker proportional to the geometry it is attached to. Returns `1` before
+   * a viewport exists, so callers get an identity scale rather than a null
+   * they have to branch on.
+   */
+  getZoom(): number {
+    return this._viewport?._zoom ?? 1
+  }
+
+  // ── Callout badges ───────────────────────────────────────
+
+  /**
+   * Declare which anchors carry an in-canvas callout badge.
+   *
+   * Badges are rendered by the engine as children of their anchor's sprite
+   * (node, subgraph, or edge), positioned in the sprite's local space, so
+   * they pan/zoom/relayout with the anchor by construction. The set persists
+   * across relayout, philosophy/theme switches, fold/unfold, and focus
+   * navigation: every sprite rebuild re-applies it. Interactions surface as
+   * `callout:click`, `callout:hover`, and `callout:hoverend` events carrying
+   * the anchor kind/id and the badge's screen position.
+   */
+  setCalloutBadges(badges: CalloutBadgeSpec[]): void {
+    this._calloutBadges = badges.map((badge) => ({ ...badge }))
+    this._applyCalloutBadges()
+  }
+
+  /** Remove every callout badge. */
+  clearCalloutBadges(): void {
+    this.setCalloutBadges([])
+  }
+
+  getCalloutBadges(): CalloutBadgeSpec[] {
+    return this._calloutBadges.map((badge) => ({ ...badge }))
+  }
+
+  /**
+   * Every rendered marker with its centre in canvas-relative screen pixels —
+   * the point a click must land on to hit it. Use it to anchor a DOM surface
+   * to a marker, or to drive a marker from outside the canvas.
+   *
+   * Only markers whose anchor is currently drawn appear: a badge pushed for a
+   * folded-away node has no position until that node is rendered.
+   */
+  getCalloutBadgePoints(): (CalloutBadgeSpec & { x: number; y: number })[] {
+    const points: (CalloutBadgeSpec & { x: number; y: number })[] = []
+    const collect = (
+      anchorKind: CalloutAnchorKind,
+      anchorId: string,
+      host: {
+        getCalloutBadgePoints(): { kind: CalloutBadgeKind; x: number; y: number }[]
+      },
+    ) => {
+      for (const point of host.getCalloutBadgePoints()) {
+        const spec = this._calloutBadges.find(
+          (badge) =>
+            badge.anchorKind === anchorKind
+            && badge.anchorId === anchorId
+            && this._specKind(badge) === point.kind,
+        )
+        if (spec) points.push({ ...spec, x: point.x, y: point.y })
+      }
+    }
+
+    for (const [id, sprite] of this._nodeSprites) collect('node', id, sprite)
+    for (const [id, container] of this._subgraphContainers) {
+      collect('subgraph', id, container)
+    }
+    for (const edgeGraphic of this._edgeGraphics) {
+      collect('edge', edgeGraphic.data.id, edgeGraphic)
+    }
+    return points
+  }
+
+  /** The marker kind a spec declares (omitted means `'callout'`). */
+  private _specKind(spec: CalloutBadgeSpec): CalloutBadgeKind {
+    return spec.kind ?? 'callout'
+  }
+
+  private _stateForSpec(spec: CalloutBadgeSpec): CalloutBadgeState {
+    return {
+      kind: this._specKind(spec),
+      ...(spec.count !== undefined ? { count: spec.count } : {}),
+    }
+  }
+
+  /**
+   * Resolve the badge spec of one kind a node sprite should carry: a direct
+   * node badge, or — when the sprite is the collapsed-subgraph summary node
+   * and the subgraph container itself is not rendered — that subgraph's
+   * badge of the same kind.
+   */
+  private _calloutSpecForNodeSprite(
+    id: string,
+    sprite: NodeSprite,
+    kind: CalloutBadgeKind,
+  ): CalloutBadgeSpec | null {
+    for (const badge of this._calloutBadges) {
+      if (badge.anchorKind === 'node' && badge.anchorId === id
+        && this._specKind(badge) === kind) {
+        return badge
+      }
+    }
+    const metadata = sprite.data.metadata as Record<string, unknown> | undefined
+    if (metadata?._isCollapsedSummary && typeof metadata._subgraphId === 'string'
+      && !this._subgraphContainers.has(metadata._subgraphId)) {
+      for (const badge of this._calloutBadges) {
+        if (badge.anchorKind === 'subgraph' && badge.anchorId === metadata._subgraphId
+          && this._specKind(badge) === kind) {
+          return badge
+        }
+      }
+    }
+    return null
+  }
+
+  /** Every marker state (one per kind, at most) a node sprite should carry. */
+  private _calloutStatesForNodeSprite(id: string, sprite: NodeSprite): CalloutBadgeState[] {
+    const kinds: CalloutBadgeKind[] = ['callout', 'comment']
+    return kinds.flatMap((kind) => {
+      const spec = this._calloutSpecForNodeSprite(id, sprite, kind)
+      return spec ? [this._stateForSpec(spec)] : []
+    })
+  }
+
+  private _applyCalloutBadges(): void {
+    for (const [id, sprite] of this._nodeSprites) {
+      sprite.setCalloutBadges(this._calloutStatesForNodeSprite(id, sprite))
+    }
+    for (const [id, container] of this._subgraphContainers) {
+      container.setCalloutBadges(
+        this._calloutBadges
+          .filter((badge) => badge.anchorKind === 'subgraph' && badge.anchorId === id)
+          .map((badge) => this._stateForSpec(badge)),
+      )
+    }
+    for (const edgeGraphic of this._edgeGraphics) {
+      edgeGraphic.setCalloutBadges(
+        this._calloutBadges
+          .filter((badge) => badge.anchorKind === 'edge' && badge.anchorId === edgeGraphic.data.id)
+          .map((badge) => this._stateForSpec(badge)),
+      )
+    }
+  }
+
+  private _emitCalloutBadgeEvent(
+    eventType: CalloutBadgeEvent['eventType'],
+    anchorKind: CalloutAnchorKind,
+    anchorId: string,
+    kind: CalloutBadgeKind,
+    payload: { x?: number; y?: number; originalEvent?: Event } | undefined,
+  ): void {
+    const spec = this._calloutBadges.find(
+      (badge) => badge.anchorKind === anchorKind && badge.anchorId === anchorId
+        && this._specKind(badge) === kind,
+    )
+    const event: CalloutBadgeEvent = {
+      anchorKind,
+      anchorId,
+      kind,
+      ...(spec?.count !== undefined ? { count: spec.count } : {}),
+      eventType,
+      x: payload?.x ?? 0,
+      y: payload?.y ?? 0,
+      ...(payload?.originalEvent ? { originalEvent: payload.originalEvent } : {}),
+    }
+    const name = eventType === 'click'
+      ? 'callout:click'
+      : eventType === 'hover'
+        ? 'callout:hover'
+        : 'callout:hoverend'
+    this._emitter.emit(name, event)
+  }
+
+  private _wireCalloutBadgeEvents(
+    target: { on(event: string, handler: (...args: unknown[]) => void): void },
+    resolveAnchor: (
+      kind: CalloutBadgeKind,
+    ) => { anchorKind: CalloutAnchorKind; anchorId: string } | null,
+  ): void {
+    const forward = (eventType: CalloutBadgeEvent['eventType']) =>
+      (...args: unknown[]) => {
+        const payload = args[0] as
+          | { kind?: CalloutBadgeKind; x?: number; y?: number; originalEvent?: Event }
+          | undefined
+        const kind: CalloutBadgeKind = payload?.kind ?? 'callout'
+        const anchor = resolveAnchor(kind)
+        if (!anchor) return
+        this._emitCalloutBadgeEvent(
+          eventType,
+          anchor.anchorKind,
+          anchor.anchorId,
+          kind,
+          payload,
+        )
+      }
+    target.on('callout:click', forward('click'))
+    target.on('callout:hover', forward('hover'))
+    target.on('callout:hoverend', forward('hoverend'))
   }
 
   // ── Private rendering ────────────────────────────────────
@@ -813,6 +1236,7 @@ export class MermaidRenderer {
     // Selection lifetime rule: any graph rebuild clears selection rather than
     // carrying a stale node id across fold/focus/layout/theme transitions.
     this._hoveredNodeId = null
+    this._hoveredEdgeId = null
     this.selectNode(null)
 
     // Clear previous children
@@ -822,32 +1246,17 @@ export class MermaidRenderer {
     this._subgraphContainers.clear()
     this._busGraphics.clear()
     this._busSourceIds.clear()
+    // `removeChildren()` above detached any previous grid graphic from the
+    // display tree — drop the reference so `_redrawBlueprintGrid` recreates
+    // and re-adds it rather than reusing a now-orphaned instance.
+    this._blueprintGridGfx = null
 
-    // Draw blueprint grid background
-    if (isBlueprint && theme.gridColor !== undefined) {
-      const gridGfx = new Graphics()
-      const gridSize = theme.gridSize ?? 20
-      const gridColor = theme.gridColor
-      const gridAlpha = theme.gridAlpha ?? 0.3
-      // Extend grid beyond the graph bounds for visual completeness
-      const padding = 100
-      const startX = -padding
-      const startY = -padding
-      const endX = positioned.width + padding
-      const endY = positioned.height + padding
-
-      // Vertical lines
-      for (let x = startX; x <= endX; x += gridSize) {
-        gridGfx.moveTo(x, startY)
-        gridGfx.lineTo(x, endY)
-      }
-      // Horizontal lines
-      for (let y = startY; y <= endY; y += gridSize) {
-        gridGfx.moveTo(startX, y)
-        gridGfx.lineTo(endX, y)
-      }
-      gridGfx.stroke({ width: 1, color: gridColor, alpha: gridAlpha })
-      this._viewport.addChild(gridGfx)
+    // Draw blueprint grid background, sized to the current canvas so it
+    // fills the visible area (not just the diagram bounds).
+    if (isBlueprint) {
+      const gridWidth = this._app?.renderer?.width ?? positioned.width
+      const gridHeight = this._app?.renderer?.height ?? positioned.height
+      this._redrawBlueprintGrid(gridWidth, gridHeight, positioned)
     }
 
     // Compute nesting depth from declared subgraph membership first, then
@@ -865,7 +1274,15 @@ export class MermaidRenderer {
 
       // Single click = fold/unfold
       let lastTapTime = 0
-      sgc.on('pointertap', () => {
+      sgc.on('pointertap', (e: FederatedPointerEvent) => {
+        // Annotation marker first: route taps inside a marker's radius to
+        // callout:click (with the marker's kind) instead of fold/focus.
+        const markerHit = sgc.getCalloutBadgeAt(e.global.x, e.global.y)
+        if (markerHit) {
+          sgc.dispatchCalloutTap(markerHit.kind, e.nativeEvent as Event | undefined)
+          return
+        }
+
         const now = Date.now()
         if (now - lastTapTime < 400) {
           // Double-click = isolate/focus into subgraph
@@ -889,6 +1306,11 @@ export class MermaidRenderer {
         }, 250) // wait 250ms to distinguish from double-click
       })
 
+      this._wireCalloutBadgeEvents(sgc, () => ({
+        anchorKind: 'subgraph',
+        anchorId: sgId,
+      }))
+
       this._viewport.addChild(sgc)
     }
 
@@ -910,6 +1332,7 @@ export class MermaidRenderer {
         const eg = new EdgeGraphic(edge, theme, positioned.nodes, 'blueprint-routed')
         eg.drawFromSegments(wire.segments, theme)
         this._edgeGraphics.push(eg)
+        this._wireEdgeInteraction(eg)
         this._viewport.addChild(eg)
       }
 
@@ -937,6 +1360,7 @@ export class MermaidRenderer {
           reversePairOffsets.get(edge.id) ?? 0,
         ); edgeIdx++
         this._edgeGraphics.push(eg)
+        this._wireEdgeInteraction(eg)
         this._viewport.addChild(eg)
       }
     }
@@ -962,8 +1386,19 @@ export class MermaidRenderer {
         hasLink ? (linkState?.status === 'broken' ? 'broken' : 'valid') : false,
         fontName,
       )
+      if (node.metadata?._isStub) {
+        sprite.alpha = 0.4
+      }
       this._nodeSprites.set(id, sprite)
       this._viewport.addChild(sprite)
+      if (node.metadata?._isStub) continue
+
+      // Callout badge interactions — resolved lazily so a collapsed-subgraph
+      // summary node reports its subgraph's anchor, not its synthetic node id.
+      this._wireCalloutBadgeEvents(sprite, (kind) => {
+        const spec = this._calloutSpecForNodeSprite(id, sprite, kind)
+        return spec ? { anchorKind: spec.anchorKind, anchorId: spec.anchorId } : null
+      })
 
       // Hover: highlight connected edges + bus lines, dim unrelated
       sprite.on('pointerover', () => {
@@ -978,10 +1413,36 @@ export class MermaidRenderer {
 
       // Wire node click — select only, no navigation
       sprite.on('pointertap', (e: FederatedPointerEvent) => {
+        // Annotation marker first: the marker is not its own pointer target,
+        // so the sprite's handler routes taps inside a marker's radius to
+        // callout:click (with the marker's kind) and swallows the node
+        // click/selection entirely.
+        const markerHit = sprite.getCalloutBadgeAt(e.global.x, e.global.y)
+        if (markerHit) {
+          sprite.dispatchCalloutTap(markerHit.kind, e.nativeEvent as Event | undefined)
+          return
+        }
+
         // If this is a collapsed summary node, clicking expands it
         if (node.metadata?._isCollapsedSummary) {
           const sgId = node.metadata._subgraphId as string
           this.unfoldNode(sgId)
+          return
+        }
+
+        const subitem = sprite.getSemanticSubitemAt(e.global.x, e.global.y)
+        if (subitem) {
+          const evt: SubitemEvent = {
+            id: subitem.id,
+            parentKind: subitem.parentKind,
+            parentId: subitem.parentId,
+            itemKind: subitem.itemKind,
+            label: subitem.label,
+            eventType: 'click',
+            originalEvent: e.nativeEvent as Event | undefined,
+          }
+          this._emitter.emit('subitem:click', evt)
+          this.selectNode(id, { additive: this._isAdditiveSelection(e) })
           return
         }
 
@@ -991,7 +1452,7 @@ export class MermaidRenderer {
           originalEvent: e.nativeEvent as Event | undefined,
         }
         this._emitter.emit('node:click', evt)
-        this.selectNode(id)
+        this.selectNode(id, { additive: this._isAdditiveSelection(e) })
       })
 
       // Wire badge click + hover preview for linked nodes
@@ -1051,7 +1512,7 @@ export class MermaidRenderer {
     this._emitEdgeNodeCrossingWarning(positioned)
 
     // Auto-fit first (sets _fitZoom baseline), then apply detail levels
-    this.fitToView()
+    this.fitToView({ preserveReadableZoom: true })
 
     // Now that fitToView set the zoom, apply detail levels (relative to fit zoom)
     if (this._viewport) {
@@ -1092,7 +1553,77 @@ export class MermaidRenderer {
 
     this._applySceneOpacityState()
 
+    // Sprites were just rebuilt from scratch — re-apply the callout badge set
+    // so badges survive load/relayout/philosophy/theme/fold/focus rebuilds.
+    this._applyCalloutBadges()
+
     this._touchRuntimeActivity()
+  }
+
+  /**
+   * Draw (or redraw) the Blueprint-philosophy grid background.
+   *
+   * Reuses one persistent `Graphics` instance for the lifetime of a single
+   * render pass — cleared and re-stroked each call — so resize handling can
+   * refresh the grid without allocating a new display object per frame.
+   * `width`/`height` are the current canvas pixel dimensions (used to keep
+   * the grid filling the visible area as the host container grows) and
+   * `positioned` supplies the diagram bounds so the grid still covers the
+   * full diagram even when it extends past the canvas.
+   */
+  private _redrawBlueprintGrid(width: number, height: number, positioned: PositionedGraph): void {
+    if (!this._viewport) return
+    const theme = this._getActiveTheme()
+    if (theme.gridColor === undefined) return
+
+    const gridSize = theme.gridSize ?? 20
+    const gridColor = theme.gridColor
+    const gridAlpha = theme.gridAlpha ?? 0.3
+
+    if (!this._blueprintGridGfx || this._blueprintGridGfx.destroyed) {
+      this._blueprintGridGfx = new Graphics()
+      this._viewport.addChildAt(this._blueprintGridGfx, 0)
+    } else {
+      this._blueprintGridGfx.clear()
+      if (this._blueprintGridGfx.parent !== this._viewport) {
+        this._viewport.addChildAt(this._blueprintGridGfx, 0)
+      } else {
+        this._viewport.setChildIndex(this._blueprintGridGfx, 0)
+      }
+    }
+
+    // Cover the diagram bounds (with padding for visual completeness) as
+    // well as whatever is currently visible on screen, so the grid keeps
+    // filling the canvas as the host container grows or the user pans/zooms.
+    const padding = 100
+    let minX = -padding
+    let minY = -padding
+    let maxX = positioned.width + padding
+    let maxY = positioned.height + padding
+
+    const scaleX = this._viewport.scale.x || 1
+    const scaleY = this._viewport.scale.y || 1
+    const viewMinX = -this._viewport.x / scaleX
+    const viewMinY = -this._viewport.y / scaleY
+    const viewMaxX = viewMinX + width / scaleX
+    const viewMaxY = viewMinY + height / scaleY
+    minX = Math.min(minX, viewMinX - padding)
+    minY = Math.min(minY, viewMinY - padding)
+    maxX = Math.max(maxX, viewMaxX + padding)
+    maxY = Math.max(maxY, viewMaxY + padding)
+
+    const startX = Math.floor(minX / gridSize) * gridSize
+    const startY = Math.floor(minY / gridSize) * gridSize
+
+    for (let x = startX; x <= maxX; x += gridSize) {
+      this._blueprintGridGfx.moveTo(x, minY)
+      this._blueprintGridGfx.lineTo(x, maxY)
+    }
+    for (let y = startY; y <= maxY; y += gridSize) {
+      this._blueprintGridGfx.moveTo(minX, y)
+      this._blueprintGridGfx.lineTo(maxX, y)
+    }
+    this._blueprintGridGfx.stroke({ width: 1, color: gridColor, alpha: gridAlpha })
   }
 
   private _emitEdgeNodeCrossingWarning(positioned: PositionedGraph): void {
@@ -1146,6 +1677,15 @@ export class MermaidRenderer {
     if (!this._app || !this._viewport) {
       throw new Error(`Cannot ${action}() before mount() completes.`)
     }
+  }
+
+  private _readableFitZoomFloor(): number | undefined {
+    if (this._currentPhilosophy !== 'blueprint' || !this._positioned) return undefined
+
+    const nodeCount = this._positioned.nodes.size
+    const subgraphCount = this._positioned.subgraphs.size
+
+    return nodeCount <= 20 && subgraphCount >= 2 ? 0.42 : undefined
   }
 
   private _clearMessageState(): void {
@@ -1294,6 +1834,7 @@ export class MermaidRenderer {
       width: target.clientWidth,
       height: target.clientHeight,
     }
+    this._lastSettledCanvasSize = { ...this._lastObservedCanvasSize }
     this._resizeObserver = new ResizeObserver(() => {
       const nextSize = {
         width: target.clientWidth,
@@ -1312,8 +1853,22 @@ export class MermaidRenderer {
       }
       this._resizeRafId = requestAnimationFrame(() => {
         this._resizeRafId = null
-        if (this._destroyed || !this._app || !this._viewport || !this._renderedBounds) return
-        this.fitToView()
+        if (this._destroyed || !this._app || !this._viewport) return
+        // Pixi resizes the backing renderer through `resizeTo`. For an
+        // incidental host layout change, keep the viewport transform
+        // untouched so it does not discard the user's pan and zoom. A
+        // drastic single-step change (fullscreen toggle, pane reveal) is
+        // different: the old transform renders the diagram at a stale scale
+        // in a radically different viewport, so refit — even over a manual
+        // pan/zoom, because that transform was chosen for the old viewport.
+        const previousSize = this._lastSettledCanvasSize
+        this._lastSettledCanvasSize = nextSize
+        if (this._renderedBounds && isDrasticCanvasResize(previousSize, nextSize)) {
+          this.fitToView({ preserveReadableZoom: true })
+        }
+        if (this._currentPhilosophy === 'blueprint' && this._positioned) {
+          this._redrawBlueprintGrid(nextSize.width, nextSize.height, this._positioned)
+        }
       })
     })
     this._resizeObserver.observe(target)
@@ -1397,7 +1952,7 @@ export class MermaidRenderer {
     const handlers = this._keyHandler
 
     if (handlers) {
-      window.removeEventListener('keydown', handlers)
+      canvas.removeEventListener('keydown', handlers)
       this._keyHandler = null
     }
     if (this._webglContextLostHandler) {
@@ -1421,6 +1976,7 @@ export class MermaidRenderer {
       this._resizeRafId = null
     }
     this._lastObservedCanvasSize = null
+    this._lastSettledCanvasSize = null
     if (this._colorSchemeMediaQuery && this._colorSchemeChangeHandler) {
       this._colorSchemeMediaQuery.removeEventListener('change', this._colorSchemeChangeHandler)
       this._colorSchemeChangeHandler = null
@@ -1444,11 +2000,54 @@ export class MermaidRenderer {
 
     try {
       await this.mount(canvas)
+      // mount() resolves without mounting when destroy() raced the remount.
+      if (this._destroyed) return
       if (source) {
         await this.load(source, options)
       }
     } finally {
       this._setRuntimeActivity('context-recovery', false)
+    }
+  }
+
+  /**
+   * Best-effort teardown for a mount() that lost a race with destroy().
+   * Mirrors destroy() for the resources mount() had created so far, then
+   * restores the canvas's WebGL context so the embedder can mount a fresh
+   * renderer on the same canvas. (Pixi deliberately loses the context when a
+   * renderer is destroyed, and mounting onto a lost context hangs.)
+   */
+  private async _abortInFlightMount(canvas: HTMLCanvasElement, app: Application | null): Promise<void> {
+    if (app) {
+      const gl = (app.renderer as any)?.gl as WebGLRenderingContext | undefined
+      const loseContextExt = gl?.getExtension('WEBGL_lose_context') ?? null
+      const contextRestored = loseContextExt
+        ? new Promise<void>((resolve) => {
+            let settled = false
+            const onLost = (event: Event) => {
+              // Restoration is only allowed when the lost event is cancelled.
+              event.preventDefault()
+              window.setTimeout(() => loseContextExt.restoreContext(), 0)
+            }
+            const finish = () => {
+              if (settled) return
+              settled = true
+              canvas.removeEventListener('webglcontextlost', onLost)
+              canvas.removeEventListener('webglcontextrestored', finish)
+              resolve()
+            }
+            canvas.addEventListener('webglcontextlost', onLost)
+            canvas.addEventListener('webglcontextrestored', finish)
+            // Safety net: never leave the aborted mount() hanging.
+            window.setTimeout(finish, 1000)
+          })
+        : null
+      app.destroy(true, { children: true })
+      if (contextRestored) await contextRestored
+    }
+    MermaidRenderer._liveCanvases.delete(canvas)
+    if (this._canvas === canvas) {
+      this._canvas = null
     }
   }
 
@@ -1552,6 +2151,52 @@ export class MermaidRenderer {
     this._applySceneOpacityState()
   }
 
+  private _setHoveredEdge(id: string | null): void {
+    if (this._hoveredEdgeId === id) return
+    this._hoveredEdgeId = id
+    this._applySceneOpacityState()
+  }
+
+  private _wireEdgeInteraction(edgeGraphic: EdgeGraphic): void {
+    this._wireCalloutBadgeEvents(edgeGraphic, () => ({
+      anchorKind: 'edge',
+      anchorId: edgeGraphic.data.id,
+    }))
+    edgeGraphic.on('pointerover', () => {
+      if (this._performanceMode === 'stress') return
+      this._setHoveredEdge(edgeGraphic.data.id)
+    })
+    edgeGraphic.on('pointerout', () => {
+      if (this._hoveredEdgeId === edgeGraphic.data.id) {
+        this._setHoveredEdge(null)
+      }
+    })
+    edgeGraphic.on('pointertap', (e: FederatedPointerEvent) => {
+      // Annotation marker first: route taps inside a marker's radius to
+      // callout:click (with the marker's kind) instead of edge click/selection.
+      const markerHit = edgeGraphic.getCalloutBadgeAt(e.global.x, e.global.y)
+      if (markerHit) {
+        edgeGraphic.dispatchCalloutTap(markerHit.kind, e.nativeEvent as Event | undefined)
+        return
+      }
+
+      const evt: EdgeEvent = {
+        edgeId: edgeGraphic.data.id,
+        source: edgeGraphic.data.source,
+        target: edgeGraphic.data.target,
+        eventType: 'click',
+        originalEvent: e.nativeEvent as Event | undefined,
+      }
+      this._emitter.emit('edge:click', evt)
+      this.selectEdge(edgeGraphic.data.id, { additive: this._isAdditiveSelection(e) })
+    })
+  }
+
+  private _isAdditiveSelection(event: FederatedPointerEvent): boolean {
+    const nativeEvent = event.nativeEvent as MouseEvent | PointerEvent | undefined
+    return Boolean(nativeEvent?.shiftKey)
+  }
+
   private _getFocusedNodeIds(): Set<string> | null {
     if (this._focusStack.length === 0) return null
     const focusedId = this._focusStack[this._focusStack.length - 1]
@@ -1559,7 +2204,7 @@ export class MermaidRenderer {
     return focusedSg ? new Set(focusedSg.nodeIds) : null
   }
 
-  private _collectRelationshipState(activeNodeIds: Set<string>): {
+  private _collectRelationshipState(activeNodeIds: Set<string>, activeEdgeIds: Set<string>): {
     relatedNodeIds: Set<string>
     relatedEdgeIds: Set<string>
     relatedBusSourceIds: Set<string>
@@ -1569,6 +2214,12 @@ export class MermaidRenderer {
     const relatedBusSourceIds = new Set<string>()
 
     for (const eg of this._edgeGraphics) {
+      if (activeEdgeIds.has(eg.data.id)) {
+        relatedEdgeIds.add(eg.data.id)
+        relatedNodeIds.add(eg.data.source)
+        relatedNodeIds.add(eg.data.target)
+      }
+
       const connected = activeNodeIds.has(eg.data.source) || activeNodeIds.has(eg.data.target)
       if (!connected) continue
       relatedEdgeIds.add(eg.data.id)
@@ -1589,6 +2240,7 @@ export class MermaidRenderer {
   }
 
   private _baseNodeAlpha(id: string, dimmedAlpha: number): number {
+    if (id.startsWith('_stub_')) return 0.4
     if (this._currentPhilosophy !== 'narrative' || this._spineNodeIds.size === 0) return 1
     return this._spineNodeIds.has(id) ? 1 : Math.max(dimmedAlpha, 0.7)
   }
@@ -1607,43 +2259,77 @@ export class MermaidRenderer {
     return spineEdgeIds.has(id) ? 1 : Math.max(dimmedAlpha, 0.4)
   }
 
+  private _activeLens(): LensEvaluation | null {
+    return this._lenses.find((lens) => lens.name === this._activeLensName) ?? null
+  }
+
+  private _lensAlpha(score: number | undefined, dimmedAlpha: number): number {
+    if (!this._activeLensName) return 1
+    if (!score || score <= 0) return Math.max(0.12, dimmedAlpha * 0.55)
+    return 0.5 + Math.min(1, score) * 0.5
+  }
+
   private _applySceneOpacityState(): void {
     const theme = this._getActiveTheme()
     const focusedNodeIds = this._getFocusedNodeIds()
     const focusedSubgraphId = this._focusStack[this._focusStack.length - 1] ?? null
-    const activeNodeIds = new Set<string>()
-    if (this._selectedNodeId) activeNodeIds.add(this._selectedNodeId)
+    const activeNodeIds = new Set<string>(this._selectedNodeIds)
     if (this._hoveredNodeId) activeNodeIds.add(this._hoveredNodeId)
-    const hasRelationshipFocus = activeNodeIds.size > 0
-    const { relatedNodeIds, relatedEdgeIds, relatedBusSourceIds } = this._collectRelationshipState(activeNodeIds)
+    const activeEdgeIds = new Set<string>(this._selectedEdgeIds)
+    if (this._hoveredEdgeId) activeEdgeIds.add(this._hoveredEdgeId)
+    const hasRelationshipFocus = activeNodeIds.size > 0 || activeEdgeIds.size > 0
+    const relationshipDimmedAlpha = this._hoveredNodeId || this._hoveredEdgeId ? theme.hoverDimmedAlpha : theme.dimmedAlpha
+    const { relatedNodeIds, relatedEdgeIds, relatedBusSourceIds } = this._collectRelationshipState(activeNodeIds, activeEdgeIds)
+    const activeLens = this._activeLens()
 
     for (const [id, sprite] of this._nodeSprites) {
-      const focusAlpha = focusedNodeIds && !focusedNodeIds.has(id) ? theme.dimmedAlpha : 1
+      const focusAlpha = focusedNodeIds && !focusedNodeIds.has(id) && !id.startsWith('_stub_')
+        ? theme.dimmedAlpha
+        : 1
       const baseAlpha = this._baseNodeAlpha(id, theme.dimmedAlpha)
       const relationshipAlpha = hasRelationshipFocus
-        ? (relatedNodeIds.has(id) ? 1 : Math.min(baseAlpha, theme.dimmedAlpha))
+        ? (relatedNodeIds.has(id) ? 1 : Math.min(baseAlpha, relationshipDimmedAlpha))
         : baseAlpha
-      sprite.alpha = Math.min(focusAlpha, relationshipAlpha)
+      const lensAlpha = hasRelationshipFocus && relatedNodeIds.has(id)
+        ? 1
+        : this._lensAlpha(activeLens?.nodeScores.get(id), theme.dimmedAlpha)
+      sprite.alpha = Math.min(focusAlpha, relationshipAlpha, lensAlpha)
     }
 
     for (const [id, sgc] of this._subgraphContainers) {
-      sgc.alpha = focusedSubgraphId && id !== focusedSubgraphId ? theme.dimmedAlpha : 1
+      const subgraph = this._graph?.subgraphs.get(id)
+      const lensScore = subgraph
+        ? Math.max(0, ...subgraph.nodeIds.map((nodeId) => activeLens?.nodeScores.get(nodeId) ?? 0))
+        : 0
+      const lensAlpha = this._lensAlpha(lensScore, theme.dimmedAlpha)
+      sgc.alpha = Math.min(
+        focusedSubgraphId && id !== focusedSubgraphId ? theme.dimmedAlpha : 1,
+        lensAlpha,
+      )
     }
 
     for (const eg of this._edgeGraphics) {
+      eg.setHovered(eg.data.id === this._hoveredEdgeId)
+      eg.setSelected(this._selectedEdgeIds.has(eg.data.id))
       const focusAlpha = focusedNodeIds && (!focusedNodeIds.has(eg.data.source) || !focusedNodeIds.has(eg.data.target))
         ? theme.dimmedAlpha
         : 1
       const baseAlpha = this._baseEdgeAlpha(eg.data.id, theme.dimmedAlpha)
       const relationshipAlpha = hasRelationshipFocus
-        ? (relatedEdgeIds.has(eg.data.id) ? 1 : Math.min(baseAlpha, theme.dimmedAlpha))
+        ? (relatedEdgeIds.has(eg.data.id) ? 1 : Math.min(baseAlpha, relationshipDimmedAlpha))
         : baseAlpha
-      eg.alpha = Math.min(focusAlpha, relationshipAlpha)
+      const lensAlpha = hasRelationshipFocus && relatedEdgeIds.has(eg.data.id)
+        ? 1
+        : this._lensAlpha(activeLens?.edgeScores.get(eg.data.id), theme.dimmedAlpha)
+      eg.alpha = Math.min(focusAlpha, relationshipAlpha, lensAlpha)
     }
 
     for (const [sourceId, busGfx] of this._busGraphics) {
-      const relationshipAlpha = hasRelationshipFocus && !relatedBusSourceIds.has(sourceId) ? theme.dimmedAlpha : 1
-      busGfx.alpha = relationshipAlpha
+      const relationshipAlpha = hasRelationshipFocus && !relatedBusSourceIds.has(sourceId) ? relationshipDimmedAlpha : 1
+      const lensAlpha = hasRelationshipFocus && relatedBusSourceIds.has(sourceId)
+        ? 1
+        : this._lensAlpha(activeLens?.nodeScores.get(sourceId), theme.dimmedAlpha)
+      busGfx.alpha = Math.min(relationshipAlpha, lensAlpha)
     }
   }
 
@@ -1744,7 +2430,7 @@ export class MermaidRenderer {
     this._relayoutFadeGeneration += 1
     const fadeGeneration = this._relayoutFadeGeneration
 
-    const layout = createLayoutEngine(this._currentPhilosophy)
+    const layout = createLayoutEngine(this._currentPhilosophy, this._graph)
     const previousPositioned = this._positioned
     const newPositioned = layout.compute(this._graph)
     this._positioned = newPositioned
@@ -1756,6 +2442,7 @@ export class MermaidRenderer {
 
     if (previousPositioned && this._canAnimateRelayout(previousPositioned, newPositioned)) {
       this._hoveredNodeId = null
+      this._hoveredEdgeId = null
       this.selectNode(null)
       this._animateRelayout(previousPositioned, newPositioned, fadeGeneration)
       return
@@ -1822,6 +2509,16 @@ export class MermaidRenderer {
     generation: number,
   ): void {
     if (!this._app || !this._viewport) return
+
+    // The animated relayout path skips `_renderGraph`'s `removeChildren()`
+    // rebuild, so a Blueprint grid drawn on a prior render would otherwise
+    // linger after switching to a non-Blueprint philosophy. `_canAnimateRelayout`
+    // only takes this path when the *current* philosophy isn't Blueprint, so
+    // any leftover grid here is stale and must be dropped.
+    if (this._blueprintGridGfx) {
+      this._blueprintGridGfx.destroy()
+      this._blueprintGridGfx = null
+    }
 
     const app = this._app
     const theme = this._getActiveTheme()

@@ -1,4 +1,4 @@
-# mermaid-render Backlog
+# mermaid-monkey Backlog
 
 Central tracking for all pending work. Ordered by priority within each section.
 

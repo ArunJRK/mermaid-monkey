@@ -1,5 +1,10 @@
 import type {
   Directive,
+  DirectiveMetadata,
+  EntityDirective,
+  EdgeDirective,
+  FileDirective,
+  LensDirective,
   LinkDirective,
   LayoutDirective,
   PinDirective,
@@ -17,6 +22,18 @@ export interface ExtractionResult {
 
 // %% @link <nodeId> -> <path>#<fragment>
 const LINK_RE = /^%%\s+@link\s+(\S+)\s+->\s+(\S+)$/
+
+// %% @entity <nodeId> <kind>:<canonicalId> [key=value ...]
+const ENTITY_RE = /^%%\s+@entity\s+(\S+)\s+(\S+)(?:\s+(.+))?$/
+
+// %% @edge <sourceId> -> <targetId> [key=value ...]
+const EDGE_RE = /^%%\s+@edge\s+(\S+)\s+->\s+(\S+)(?:\s+(.+))?$/
+
+// %% @file [key=value ...]
+const FILE_RE = /^%%\s+@file(?:\s+(.+))?$/
+
+// %% @lens <name> [key=value ...]
+const LENS_RE = /^%%\s+@lens\s+(\S+)(?:\s+(.+))?$/
 
 // %% @layout <philosophy>
 const LAYOUT_RE = /^%%\s+@layout\s+(\S+)$/
@@ -38,6 +55,59 @@ function parseLinkTarget(raw: string): { targetFile: string; targetNode?: string
   return {
     targetFile: raw.slice(0, hashIdx),
     targetNode: raw.slice(hashIdx + 1),
+  }
+}
+
+function splitDirectiveArgs(raw = ''): string[] {
+  const tokens: string[] = []
+  let current = ''
+  let inQuote = false
+
+  for (let i = 0; i < raw.length; i += 1) {
+    const char = raw[i]
+    if (char === '"') {
+      inQuote = !inQuote
+      continue
+    }
+    if (/\s/.test(char) && !inQuote) {
+      if (current) {
+        tokens.push(current)
+        current = ''
+      }
+      continue
+    }
+    current += char
+  }
+
+  if (current) tokens.push(current)
+  return tokens
+}
+
+function parseMetadata(raw?: string): DirectiveMetadata {
+  const metadata: DirectiveMetadata = {}
+  for (const token of splitDirectiveArgs(raw)) {
+    const equalsIdx = token.indexOf('=')
+    if (equalsIdx === -1) {
+      metadata[token] = true
+      continue
+    }
+
+    const key = token.slice(0, equalsIdx).trim()
+    const value = token.slice(equalsIdx + 1).trim()
+    if (!key) continue
+    metadata[key] = value.includes(',') || key === 'tags' || key === 'include'
+      ? value.split(',').map((part) => part.trim()).filter(Boolean)
+      : value
+  }
+  return metadata
+}
+
+function parseEntityRef(raw: string): { entityType: string; entityId: string } | null {
+  const colonIdx = raw.indexOf(':')
+  if (colonIdx <= 0 || colonIdx === raw.length - 1) return null
+  return {
+    entityType: raw.slice(0, colonIdx),
+    entityId: raw.slice(colonIdx + 1),
   }
 }
 
@@ -67,6 +137,85 @@ export function extractDirectives(source: string): ExtractionResult {
       warnings.push({
         code: 'LINK_DIRECTIVE_INVALID',
         message: `Malformed @link directive ignored: "${trimmed}"`,
+      })
+      continue
+    }
+
+    // Try @entity
+    const entityMatch = trimmed.match(ENTITY_RE)
+    if (entityMatch) {
+      const entityRef = parseEntityRef(entityMatch[2])
+      if (!entityRef) {
+        warnings.push({
+          code: 'ENTITY_DIRECTIVE_INVALID',
+          message: `Malformed @entity directive ignored: "${trimmed}"`,
+        })
+        continue
+      }
+      const d: EntityDirective = {
+        type: 'entity',
+        nodeId: entityMatch[1],
+        entityType: entityRef.entityType,
+        entityId: entityRef.entityId,
+        metadata: parseMetadata(entityMatch[3]),
+      }
+      directives.push(d)
+      continue
+    }
+    if (trimmed.startsWith('%% @entity')) {
+      warnings.push({
+        code: 'ENTITY_DIRECTIVE_INVALID',
+        message: `Malformed @entity directive ignored: "${trimmed}"`,
+      })
+      continue
+    }
+
+    // Try @edge
+    const edgeMatch = trimmed.match(EDGE_RE)
+    if (edgeMatch) {
+      const d: EdgeDirective = {
+        type: 'edge',
+        source: edgeMatch[1],
+        target: edgeMatch[2],
+        metadata: parseMetadata(edgeMatch[3]),
+      }
+      directives.push(d)
+      continue
+    }
+    if (trimmed.startsWith('%% @edge')) {
+      warnings.push({
+        code: 'EDGE_DIRECTIVE_INVALID',
+        message: `Malformed @edge directive ignored: "${trimmed}"`,
+      })
+      continue
+    }
+
+    // Try @file
+    const fileMatch = trimmed.match(FILE_RE)
+    if (fileMatch) {
+      const d: FileDirective = {
+        type: 'file',
+        metadata: parseMetadata(fileMatch[1]),
+      }
+      directives.push(d)
+      continue
+    }
+
+    // Try @lens
+    const lensMatch = trimmed.match(LENS_RE)
+    if (lensMatch) {
+      const d: LensDirective = {
+        type: 'lens',
+        name: lensMatch[1],
+        metadata: parseMetadata(lensMatch[2]),
+      }
+      directives.push(d)
+      continue
+    }
+    if (trimmed.startsWith('%% @lens')) {
+      warnings.push({
+        code: 'LENS_DIRECTIVE_INVALID',
+        message: `Malformed @lens directive ignored: "${trimmed}"`,
       })
       continue
     }

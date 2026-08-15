@@ -1,10 +1,10 @@
-# Mermaid Render Task Checkpoint
+# Mermaid Monkey Task Checkpoint
 
 Last updated: 2026-05-30, goal-driven pass in progress
 
 ## Current Objective
 
-Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Current focus is the remaining requirement-audit holes, especially item `44b` (adapter-backed WebGPU device-loss recovery) and any final items that still lack strong end-to-end proof.
+Continue from `goal.md` toward `@mermaid-monkey/core` v1 web/demo release. Current focus is the remaining requirement-audit holes, especially item `44b` (adapter-backed WebGPU device-loss recovery) and any final items that still lack strong end-to-end proof.
 
 ## Latest Resume Notes
 
@@ -37,7 +37,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
     - core ESM: `202.86 KiB` (`207724 bytes`)
     - core CJS: `205.14 KiB` (`210067 bytes`)
     - demo entry: `index-C8tk_jFF.js` `478.38 KiB` raw (`489864 bytes`) / `137.53 KiB` gzip (`140829 bytes`)
-    - dry-run tarball: `mermaid-render-core-1.0.0.tgz`, package size `275.8 kB`
+    - dry-run tarball: `mermaid-monkey-core-1.0.0.tgz`, package size `275.8 kB`
 - `docs/release.md` and `docs/tech.md` now match that fresh gate instead of the older `142` / `82` checkpoint.
 - Requirement-audit tie-backs on the current tree:
   - `goal.md` item `7` is covered by the browser/lifecycle suite:
@@ -56,12 +56,12 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
   - `goal.md` item `39` now has paired preview-theme artifacts in addition to preview-state and font-family assertions
   - `goal.md` item `52` now has a committed rendered-footprint routing artifact in addition to the segment-vs-rect proof
   - `goal.md` item `55` remains intentionally enforced by numeric theme-contrast tests rather than screenshots, because the requirement itself is a documented contrast-ratio floor
-- `@mermaid-render/core` is now versioned `1.0.0`, and the verified dry-run tarball is `mermaid-render-core-1.0.0.tgz`.
+- `@mermaid-monkey/core` is now versioned `1.0.0`, and the verified dry-run tarball is `mermaid-monkey-core-1.0.0.tgz`.
 - The built static demo artifact now has its own reproducible smoke path:
-  - `pnpm --filter @mermaid-render/core test:browser:static-demo`
+  - `pnpm --filter @mermaid-monkey/core test:browser:static-demo`
   - it serves `packages/core/dist-demo/` from a plain static HTTP server and proves the built artifact renders, switches philosophy, follows a cross-file link, and responds to the file picker
 - The GPU/lifecycle slice now has its own focused browser gate:
-  - `pnpm --filter @mermaid-render/core test:browser:lifecycle`
+  - `pnpm --filter @mermaid-monkey/core test:browser:lifecycle`
   - current result: `10` passed
   - it isolates multi-instance behavior, lifecycle misuse errors, destroy-time cleanup of handlers/timers/live-canvas ownership, synthetic WebGL context recovery, no-adapter WebGPU fallback, visibility/idle ticker behavior, readable fallback states, and the WebGPU device-loss probe path
   - the WebGPU device-loss probe now also keeps a committed harness artifact for its terminal state when no usable adapter exists, instead of relying only on the returned probe object
@@ -72,7 +72,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
     - headless Chromium `148.0.7778.96` reports `navigator.gpu === undefined`
 
 - The relayout/animation slice now also has its own focused browser gate:
-  - `pnpm --filter @mermaid-render/core test:browser:relayout`
+  - `pnpm --filter @mermaid-monkey/core test:browser:relayout`
   - current result: `9` passed
   - it isolates the main animated-proof surface for `goal.md` items `30`, `48`, `49`, and the active runtime half of `50`:
     - fold state survives a philosophy switch
@@ -88,30 +88,30 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
     - `relayout-moving-edge-attached-chromium-darwin.png` now uses a fixed-size centered crop instead of geometry-derived image dimensions
     - that removed a real clustered-run flake where tiny motion differences changed the snapshot width by a few pixels
 - The spring/runtime animation slice now also has a first-class rerun path:
-  - `pnpm --filter @mermaid-render/core test:animation`
+  - `pnpm --filter @mermaid-monkey/core test:animation`
   - current result:
     - spring + animation-clock unit slice: `12` passed
     - relayout browser slice: `9` passed
   - this gives `goal.md` items `47` through `50` one concrete verification command instead of splitting the proof across ad hoc vitest and Playwright invocations
 - The theme/emphasis slice now also has a first-class rerun path:
-  - `pnpm --filter @mermaid-render/core test:theme`
+  - `pnpm --filter @mermaid-monkey/core test:theme`
   - current result:
     - theme unit slice: `7` passed
     - theme/emphasis browser slice: `10` passed
   - this gives `goal.md` items `55` through `64` one concrete verification command instead of scattering the proof across several unit files and many browser `-g` runs
 - The cross-file linking and hover-preview slice now also has a first-class rerun path:
-  - `pnpm --filter @mermaid-render/core test:linking`
+  - `pnpm --filter @mermaid-monkey/core test:linking`
   - current result:
     - parser/resolver unit slice: `20` passed
     - linking/preview browser slice: `16` passed
   - this gives `goal.md` items `33` through `40` one concrete verification command instead of scattering the proof across parser unit tests and many browser `-g` runs
 - The render-quality and viewport slice now also has a first-class rerun path:
-  - `pnpm --filter @mermaid-render/core test:render-quality`
+  - `pnpm --filter @mermaid-monkey/core test:render-quality`
   - current result:
     - browser slice: `22` passed
   - this gives `goal.md` items `13` through `32` one concrete verification command for the geometry, routing, fit/zoom, layering, containment, and degenerate-rendering invariants instead of scattering the proof across many browser `-g` runs
 - The browser integration, embed, and static-demo surface now also has a first-class rerun path:
-  - `pnpm --filter @mermaid-render/core test:web`
+  - `pnpm --filter @mermaid-monkey/core test:web`
   - current result:
     - browser integration/embed slice: `8` passed
     - built static demo smoke: `1` passed
@@ -124,7 +124,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
     - readable invalid-input and unsupported-diagram failure states
     - built static demo artifact rendering and navigation
 - The performance and stress-degradation surface now also has a first-class rerun path:
-  - `pnpm --filter @mermaid-render/core test:performance`
+  - `pnpm --filter @mermaid-monkey/core test:performance`
   - current result:
     - performance/stress browser slice: `5` passed
   - latest focused run measurements:
@@ -137,7 +137,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
     - current stress-mode preview suppression
     - stress-mode relayout fast path
 - The release artifact and ship-surface checks now also have a first-class rerun path:
-  - `pnpm --filter @mermaid-render/core test:ship`
+  - `pnpm --filter @mermaid-monkey/core test:ship`
   - current result:
     - built static demo smoke: `1` passed
     - bundle budget check: passed
@@ -146,7 +146,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
     - core ESM: `201.94 KiB` (`206788 bytes`)
     - core CJS: `204.23 KiB` (`209128 bytes`)
     - demo entry: `index-C8tk_jFF.js` `478.38 KiB` raw (`489864 bytes`) / `137.53 KiB` gzip (`140829 bytes`)
-    - dry-run tarball: `mermaid-render-core-1.0.0.tgz`, package size `277.8 kB`
+    - dry-run tarball: `mermaid-monkey-core-1.0.0.tgz`, package size `277.8 kB`
   - this gives `goal.md` items `11` and the artifact/publish half of `12` one concrete verification command for:
     - fresh library build
     - fresh static demo build
@@ -218,12 +218,12 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
   - VS Code is future-facing, not part of the current release target
   - current use cases are described in flowchart/web terms rather than C4/class-diagram claims
 - `docs/tech.md` architecture now matches the same release boundary:
-  - `@mermaid-render/core` + the static demo are the shipped v1 artifacts
-  - `@mermaid-render/vscode` is described as a repo-local future shell, not a current release deliverable
+  - `@mermaid-monkey/core` + the static demo are the shipped v1 artifacts
+  - `@mermaid-monkey/vscode` is described as a repo-local future shell, not a current release deliverable
 - `README.md` now points at `docs/pain-points.md` as the explicit issue-backed problem list, in addition to the broader design problem statement.
 - `docs/release.md` now reflects the current release state directly:
   - publish instructions refer to the current `1.0.0` tree, not a future version bump
-  - the latest verified dry-run artifact is named explicitly as `mermaid-render-core-1.0.0.tgz`
+  - the latest verified dry-run artifact is named explicitly as `mermaid-monkey-core-1.0.0.tgz`
 - README-facing screenshots now exist as checked-in docs assets:
   - `docs/assets/readme-overview-narrative.png`
   - `docs/assets/readme-blueprint-simple-flow.png`
@@ -327,7 +327,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
 - Dev URL: `http://127.0.0.1:3000/`
 - Browser verification command family used so far:
   - `agent-browser --session mermaid-render ...` in earlier rendering passes
-  - `pnpm --filter @mermaid-render/core test:browser` for current Playwright coverage
+  - `pnpm --filter @mermaid-monkey/core test:browser` for current Playwright coverage
 - Pre-existing unrelated working-tree changes: deleted `.claude/worktrees/agent-*` marker files. Do not revert unless explicitly asked.
 
 ## Changes Made In This Pass
@@ -439,7 +439,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
   - Added a real flat ESLint config for TypeScript/browser/node files in `src`, `tests`, and `dev`.
 
 - `docs/release.md`
-  - Added the reproducible npm publish path for `@mermaid-render/core`.
+  - Added the reproducible npm publish path for `@mermaid-monkey/core`.
   - Added the static deploy path for `packages/core/dist-demo/`.
   - Documented `pack` / `npm pack --dry-run` verification and local static preview commands.
   - Added the reproducible bundle-budget check command and what it enforces.
@@ -613,7 +613,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - runtime change:
      - raised `dimmedAlpha` to `0.3` across dark themes and `0.32` for the light narrative palette
    - verified with:
-     - `pnpm --filter @mermaid-render/core test -- --run packages/core/src/renderer/__tests__/theme-emphasis.test.ts packages/core/src/renderer/__tests__/theme-contrast.test.ts`
+     - `pnpm --filter @mermaid-monkey/core test -- --run packages/core/src/renderer/__tests__/theme-emphasis.test.ts packages/core/src/renderer/__tests__/theme-contrast.test.ts`
      - targeted browser checks:
        - `recolors live node, edge, subgraph, and broken-link states on philosophy switch`
        - `keeps hover and selection as distinct visual states that can coexist`
@@ -662,10 +662,10 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - that live relayout attachment case now also keeps a clipped motion artifact around the moving edge and its endpoint nodes:
        - `packages/core/tests/browser/render.spec.ts-snapshots/relayout-moving-edge-attached-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core typecheck`
-     - `pnpm --filter @mermaid-render/core test` → `143` passed
-     - `pnpm --filter @mermaid-render/core test:browser` → `44` passed
-     - `pnpm --filter @mermaid-render/core build`
+     - `pnpm --filter @mermaid-monkey/core typecheck`
+     - `pnpm --filter @mermaid-monkey/core test` → `143` passed
+     - `pnpm --filter @mermaid-monkey/core test:browser` → `44` passed
+     - `pnpm --filter @mermaid-monkey/core build`
      - `git diff --check`
    - this is real progress on item 48 and the active-path part of item 50, but the broader animation architecture is still not fully unified because the dormant `LayoutAnimator` branch still exists separately from the shipped relayout engine.
 
@@ -680,9 +680,9 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - `packages/core/src/renderer/__tests__/layout-animator.test.ts`
      - added a regression proving the helper uses an attached ticker instead of scheduling its own rAF loop
    - verified with:
-     - `pnpm --filter @mermaid-render/core typecheck`
-     - `pnpm --filter @mermaid-render/core test -- --run packages/core/src/renderer/__tests__/layout-animator.test.ts packages/core/src/renderer/__tests__/spring.test.ts` → passing
-     - `pnpm --filter @mermaid-render/core build`
+     - `pnpm --filter @mermaid-monkey/core typecheck`
+     - `pnpm --filter @mermaid-monkey/core test -- --run packages/core/src/renderer/__tests__/layout-animator.test.ts packages/core/src/renderer/__tests__/spring.test.ts` → passing
+     - `pnpm --filter @mermaid-monkey/core build`
    - this does not mean the renderer now routes every relayout through `LayoutAnimator`; it means the remaining helper no longer carries an incompatible timing policy if it is used.
 
 22. `goal.md` item 50 moved forward again by removing the last direct `requestAnimationFrame` fallback branches from the shared animation primitives:
@@ -695,8 +695,8 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - `packages/core/src/renderer/__tests__/layout-animator.test.ts`
      - added a regression proving the helper falls back to the Pixi shared ticker instead of scheduling its own rAF loop
    - verified with:
-     - `pnpm --filter @mermaid-render/core typecheck`
-     - `pnpm --filter @mermaid-render/core test -- --run src/renderer/__tests__/layout-animator.test.ts src/renderer/__tests__/spring.test.ts` → `145` passed
+     - `pnpm --filter @mermaid-monkey/core typecheck`
+     - `pnpm --filter @mermaid-monkey/core test -- --run src/renderer/__tests__/layout-animator.test.ts src/renderer/__tests__/spring.test.ts` → `145` passed
      - targeted browser checks:
        - `supports focus navigation in the browser renderer`
        - `rapid relayout interruptions settle without leaving the viewport partially faded`
@@ -712,8 +712,8 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - the only shipped animation path is now the Pixi-ticker-driven viewport + relayout runtime
    - verified with:
      - `rg -n "LayoutAnimator|layout-animator" packages/core -g '!dist*'` → no remaining runtime references
-     - `pnpm --filter @mermaid-render/core typecheck` → passed
-     - `pnpm --filter @mermaid-render/core test:browser` → `52` passed
+     - `pnpm --filter @mermaid-monkey/core typecheck` → passed
+     - `pnpm --filter @mermaid-monkey/core test:browser` → `52` passed
      - `git diff --check` → passed
 
 24. `goal.md` item 50 now also has a source-level regression guard:
@@ -721,7 +721,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - it recursively scans `src/renderer/**` and fails if `requestAnimationFrame` or `cancelAnimationFrame` reappears in renderer animation paths
    - the only allowed remaining use is the resize debounce tied to `_resizeRafId` in `mermaid-renderer.ts`, which is not an animation clock
    - verified with:
-     - `pnpm --filter @mermaid-render/core test -- --run src/renderer/__tests__/animation-clock.test.ts`
+     - `pnpm --filter @mermaid-monkey/core test -- --run src/renderer/__tests__/animation-clock.test.ts`
 
 25. `goal.md` item 50 now also has direct browser proof on the active relayout path, not only on a settled scene:
    - extended `packages/core/dev/lifecycle-harness.ts` with a relayout-visibility probe that:
@@ -732,7 +732,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - added browser proof in `packages/core/tests/browser/render.spec.ts`:
      - `pauses active relayout motion while hidden and resumes it when visible again`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "pauses and resumes the ticker on visibility changes|pauses active relayout motion while hidden and resumes it when visible again|stops the ticker after idle and restarts on pointer activity"`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "pauses and resumes the ticker on visibility changes|pauses active relayout motion while hidden and resumes it when visible again|stops the ticker after idle and restarts on pointer activity"`
 
 26. `goal.md` item 36 now has direct browser/runtime proof in addition to docs and unit coverage:
    - existing implementation already enforced the trust boundary:
@@ -749,7 +749,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - the visible out-of-scope warning state is now also pinned by a committed canvas snapshot:
        - `packages/core/tests/browser/render.spec.ts-snapshots/out-of-scope-link-warning-state-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "rejects out-of-scope link targets without raw fetch and surfaces the broken state" --update-snapshots` → passed
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "rejects out-of-scope link targets without raw fetch and surfaces the broken state" --update-snapshots` → passed
 
 25. `goal.md` item 30 now has stronger direct browser proof for the stale-sprite/orphan half of the contract:
    - `packages/core/dev/main.ts`
@@ -765,8 +765,8 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - no orphan node/edge/subgraph sprites remain on the viewport
      - no duplicate node/edge/subgraph IDs remain on the viewport
    - verified with:
-     - `pnpm --filter @mermaid-render/core typecheck`
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps the stage free of orphaned or duplicate sprites across fold, focus, and philosophy rebuilds"` → passed
+     - `pnpm --filter @mermaid-monkey/core typecheck`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps the stage free of orphaned or duplicate sprites across fold, focus, and philosophy rebuilds"` → passed
      - `git diff --check`
   - this was an intermediate checkpoint only. The later relayout browser slice now also covers:
     - smooth multi-frame node progression instead of teleporting
@@ -786,7 +786,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - no duplicate node/edge/subgraph IDs appear mid-flight
      - at least one node is actually moving, so the test samples a real transition instead of a static frame
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps live relayout motion free of duplicate or orphaned sprites mid-animation"` → passed
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps live relayout motion free of duplicate or orphaned sprites mid-animation"` → passed
 
 27. `goal.md` item 30 now has a first direct continuity proof for the live relayout motion path:
    - `packages/core/tests/browser/render.spec.ts`
@@ -798,8 +798,8 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - displacement from the start increases monotonically across samples instead of snapping backward
      - no single sampled step is an oversized “teleport” relative to the total motion
    - verified with:
-     - `pnpm --filter @mermaid-render/core typecheck`
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "moves nodes through a smooth live relayout progression instead of teleporting"` → passed
+     - `pnpm --filter @mermaid-monkey/core typecheck`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "moves nodes through a smooth live relayout progression instead of teleporting"` → passed
 
 28. `goal.md` item 30 now also has a screenshot-backed mid-motion frame for the live relayout path:
    - `packages/core/tests/browser/render.spec.ts`
@@ -809,8 +809,8 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - `packages/core/tests/browser/render.spec.ts-snapshots/relayout-mid-motion-clean-frame-chromium-darwin.png`
    - the test waits until nodes are measurably moving during a real narrative → radial relayout, then captures the actual canvas frame instead of relying only on inventory and coordinate assertions
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "renders a clean mid-relayout frame without double-drawn node artifacts" --update-snapshots` → passed
-     - `pnpm --filter @mermaid-render/core test:browser` → `52` passed
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "renders a clean mid-relayout frame without double-drawn node artifacts" --update-snapshots` → passed
+     - `pnpm --filter @mermaid-monkey/core test:browser` → `52` passed
 
 29. `goal.md` item 30 now also has screenshot-backed proof that folded visual state survives a philosophy switch:
    - `packages/core/tests/browser/render.spec.ts`
@@ -820,8 +820,8 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - committed snapshot baseline:
      - `packages/core/tests/browser/render.spec.ts-snapshots/fold-state-after-philosophy-switch-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "preserves fold state when switching philosophy" --update-snapshots` → passed
-     - `pnpm --filter @mermaid-render/core test:browser` → `52` passed
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "preserves fold state when switching philosophy" --update-snapshots` → passed
+     - `pnpm --filter @mermaid-monkey/core test:browser` → `52` passed
 
 30. `goal.md` item 18 now has direct runtime/browser evidence instead of only a docs caveat:
    - `packages/core/src/renderer/mermaid-renderer.ts`
@@ -832,9 +832,9 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - added browser proof:
        - `surfaces a readable warning when a non-Blueprint edge passes through an unrelated node`
    - verified with:
-     - `pnpm --filter @mermaid-render/core typecheck`
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "surfaces a readable warning when a non-Blueprint edge passes through an unrelated node"` → passed
-     - `pnpm --filter @mermaid-render/core test:browser` → `50` passed
+     - `pnpm --filter @mermaid-monkey/core typecheck`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "surfaces a readable warning when a non-Blueprint edge passes through an unrelated node"` → passed
+     - `pnpm --filter @mermaid-monkey/core test:browser` → `50` passed
    - this does not make non-Blueprint routing obstacle-free; it makes the remaining crossing level explicit instead of silent, which is the documented v1 contract.
 
 31. `goal.md` item 31 moved forward on the font-completeness side:
@@ -849,8 +849,8 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - live philosophy switches move subgraph labels onto `MermaidBlueprint`
      - Blueprint hover previews use `MermaidBlueprint` for both node labels and the preview title
    - verified with:
-     - `pnpm --filter @mermaid-render/core typecheck`
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps edge labels clear of nodes and rendered edge paths|recolors live node, edge, subgraph, and broken-link states on philosophy switch|invalidates preview cache on reload and uses the target file philosophy"` → passed
+     - `pnpm --filter @mermaid-monkey/core typecheck`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps edge labels clear of nodes and rendered edge paths|recolors live node, edge, subgraph, and broken-link states on philosophy switch|invalidates preview cache on reload and uses the target file philosophy"` → passed
 
 32. `goal.md` item 45 now has broader browser-backed degradation evidence:
    - stress mode was already documented and verified to:
@@ -863,10 +863,10 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - screenshot-backed regression now also proves the simplified stress-mode canvas state:
      - `packages/core/tests/browser/render.spec.ts-snapshots/stress-mode-suppression-chromium-darwin.png`
    - verified with:
-      - `pnpm --filter @mermaid-render/core exec playwright test -g "suppresses cross-file hover previews in stress mode"` → passed
-      - `pnpm --filter @mermaid-render/core exec playwright test -g "suppresses secondary edge and subgraph detail in stress mode" --update-snapshots` → passed
-      - `pnpm --filter @mermaid-render/core exec playwright test -g "switches into stress mode for large graphs instead of only warning|suppresses secondary edge and subgraph detail in stress mode|suppresses cross-file hover previews in stress mode|skips relayout fade and motion work when switching layouts in stress mode"` → passed
-      - `pnpm --filter @mermaid-render/core test:browser` → `52` passed
+      - `pnpm --filter @mermaid-monkey/core exec playwright test -g "suppresses cross-file hover previews in stress mode"` → passed
+      - `pnpm --filter @mermaid-monkey/core exec playwright test -g "suppresses secondary edge and subgraph detail in stress mode" --update-snapshots` → passed
+      - `pnpm --filter @mermaid-monkey/core exec playwright test -g "switches into stress mode for large graphs instead of only warning|suppresses secondary edge and subgraph detail in stress mode|suppresses cross-file hover previews in stress mode|skips relayout fade and motion work when switching layouts in stress mode"` → passed
+      - `pnpm --filter @mermaid-monkey/core test:browser` → `52` passed
 
 33. `goal.md` item 9 now has focused browser proof for the responsive mobile shell:
    - `packages/core/dev/main.ts`
@@ -882,7 +882,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - committed snapshot baseline:
      - `packages/core/tests/browser/render.spec.ts-snapshots/mobile-responsive-shell-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "reflows controls and keeps the rendered graph usable on a narrow mobile viewport" --update-snapshots` → passed
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "reflows controls and keeps the rendered graph usable on a narrow mobile viewport" --update-snapshots` → passed
    - note:
      - a subsequent full `test:browser` run produced two isolated Blueprint test flakes, but both failing cases passed immediately when rerun individually, so the mobile-shell proof itself is considered good evidence while the suite count remains conservatively unchanged here.
 
@@ -893,7 +893,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - repeated runs showed occasional false negatives from intermediate interpolation drift even though the visual/runtime invariant still held
      - this keeps the test aligned to the user-visible requirement instead of overfitting to one exact sampled edge endpoint
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps edge endpoints attached to moving nodes during live relayout animation" --repeat-each=8` → `8 passed`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps edge endpoints attached to moving nodes during live relayout animation" --repeat-each=8` → `8 passed`
 
 - `README.md`
   - Added an explicit v1 support boundary note: the current shipped parser/runtime support is `flowchart` only.
@@ -921,11 +921,11 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
 
 ## Final Verification Completed
 
-- `pnpm --filter @mermaid-render/core typecheck` passed.
-- `pnpm --filter @mermaid-render/core test` passed: 132 tests.
-- `pnpm --filter @mermaid-render/core test:browser` passed: 32 Playwright tests.
-- `pnpm --filter @mermaid-render/core build` passed.
-- `pnpm --filter @mermaid-render/core build:demo` passed.
+- `pnpm --filter @mermaid-monkey/core typecheck` passed.
+- `pnpm --filter @mermaid-monkey/core test` passed: 132 tests.
+- `pnpm --filter @mermaid-monkey/core test:browser` passed: 32 Playwright tests.
+- `pnpm --filter @mermaid-monkey/core build` passed.
+- `pnpm --filter @mermaid-monkey/core build:demo` passed.
 - `git diff --check` passed.
 
 ## Incremental Update
@@ -953,10 +953,10 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
   - `approxFps ≈ 103.49`
 - `pnpm lint` passed.
 - `pnpm verify:core` passed from the repo root.
-- `pnpm --filter @mermaid-render/core bundle:check` passed.
-- `pnpm --filter mermaid-render-vscode typecheck` passed.
-- `pnpm --filter mermaid-render-vscode build` passed.
-- `pnpm --filter @mermaid-render/core pack --pack-destination ../../artifacts` passed and wrote `artifacts/mermaid-render-core-0.1.0.tgz`.
+- `pnpm --filter @mermaid-monkey/core bundle:check` passed.
+- `pnpm --filter mermaid-monkey-vscode typecheck` passed.
+- `pnpm --filter mermaid-monkey-vscode build` passed.
+- `pnpm --filter @mermaid-monkey/core pack --pack-destination ../../artifacts` passed and wrote `artifacts/mermaid-monkey-core-0.1.0.tgz`.
 - `git diff --check` passed.
 - Browser checks passed with no page errors:
   - Desktop narrative overview: `/private/tmp/mermaid-render-final-blueprint-order-centered.png` is actually narrative overview after reload.
@@ -1004,7 +1004,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
 - Current demo bundle note:
   - `packages/core/dist-demo/assets/index-BfAsorDR.js` is `453.10 kB` minified, `132.61 kB` gzip
   - Example `.mmd` files are now emitted as separate lazy chunks, so the initial entry chunk no longer scales with the bundled example corpus.
-  - `pnpm --filter @mermaid-render/core bundle:check` now enforces the `~330 KiB` budget on `dist/index.js` and `dist/index.cjs` and reports the current demo entry chunk.
+  - `pnpm --filter @mermaid-monkey/core bundle:check` now enforces the `~330 KiB` budget on `dist/index.js` and `dist/index.cjs` and reports the current demo entry chunk.
   - Lazy-loading Mermaid parsing removed the previous Vite chunk-size warning, and lazy-loading the example corpus shaved the entry chunk further, but the demo entry is still above the old `~330 kB` note from `docs/tech.md`
 
 ## Next Rendering/UX Tasks
@@ -1039,7 +1039,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - core ESM: `202.86 KiB` (`207724 bytes`)
      - core CJS: `205.14 KiB` (`210067 bytes`)
      - demo entry: `index-C8tk_jFF.js` `478.38 KiB` raw (`489864 bytes`), `137.53 KiB` gzip (`140829 bytes`)
-     - dry-run tarball: `mermaid-render-core-1.0.0.tgz`, package size `275.8 kB`, total files `7`
+     - dry-run tarball: `mermaid-monkey-core-1.0.0.tgz`, package size `275.8 kB`, total files `7`
    - `docs/release.md` documents both the npm publish path and the static demo deploy path
 
 4a. `goal.md` items 41, 42, 43, and 46 now have direct browser/runtime proof on the current tree:
@@ -1090,8 +1090,8 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - the visible broken-fragment badge state is now also pinned by a committed clipped snapshot:
        - `packages/core/tests/browser/render.spec.ts-snapshots/broken-link-missing-fragment-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "surfaces malformed @link syntax as a readable author warning in the browser harness" --update-snapshots`
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "shows broken-link state and readable feedback for missing target-node fragments" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "surfaces malformed @link syntax as a readable author warning in the browser harness" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "shows broken-link state and readable feedback for missing target-node fragments" --update-snapshots`
 
 4c. `goal.md` item 38 now has direct runtime/browser proof for the bounded side of preview caching:
    - stale preview invalidation was already covered on reload; the browser harness now also proves the cache bound and eviction behavior directly
@@ -1102,7 +1102,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - a recently touched cached target is retained
      - the newest cached target is present after eviction
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps the preview cache bounded and retains recently used entries"`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps the preview cache bounded and retains recently used entries"`
 
 4d. `goal.md` item 35 now has direct browser proof for canonical path normalization through the shipped navigation path:
    - resolver rules were already documented and unit-tested, but are now also proven through browser navigation
@@ -1112,7 +1112,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - extensionless path that gains `.mmd`
    - both variants land on `/examples/microservice/order-service.mmd` and reveal the same target node
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "canonicalizes equivalent link target spellings to the same file in browser navigation"`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "canonicalizes equivalent link target spellings to the same file in browser navigation"`
 
 4e. `goal.md` item 33 now has direct browser proof on the real `@link` click path, not only helper-driven navigation:
    - the browser suite already proved helper navigation could reveal a target node after loading a file
@@ -1122,7 +1122,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - harness `navigateToFile(targetFile, targetNode)`
    - clicking a valid linked node in `/examples/cross-file/main.mmd` now has direct browser evidence that it lands on `/examples/cross-file/auth.mmd` and reveals `loginFlow`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "navigates through a real @link click and reveals the fragment target node"`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "navigates through a real @link click and reveals the fragment target node"`
 
 4f. `goal.md` item 20 now has screenshot-backed browser proof in addition to the existing geometry assertions:
    - self-loops already had bounds-based proof that they render with nonzero visible shape
@@ -1130,14 +1130,14 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - the browser suite now also keeps a committed canvas snapshot baseline for that fixture:
      - `packages/core/tests/browser/render.spec.ts-snapshots/self-loop-bidirectional-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "renders self-loops and opposite-direction edges as distinct readable shapes" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "renders self-loops and opposite-direction edges as distinct readable shapes" --update-snapshots`
 
 4g. `goal.md` item 19 now has screenshot-backed browser proof in addition to the existing geometry assertions:
    - edge-label clearance was already enforced by checking label bounds against node shapes and rendered edge paths
    - the browser suite now also keeps a committed canvas snapshot baseline for the Blueprint `simple-flow` case:
      - `packages/core/tests/browser/render.spec.ts-snapshots/edge-label-clearance-blueprint-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps edge labels clear of nodes and rendered edge paths" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps edge labels clear of nodes and rendered edge paths" --update-snapshots`
 
 4h. `goal.md` item 23 now has screenshot-backed browser proof in addition to the existing bounds/state assertions:
    - the browser suite already proved hover previews:
@@ -1147,7 +1147,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - it now also keeps a committed snapshot baseline for the visible on-screen popup state:
      - `packages/core/tests/browser/render.spec.ts-snapshots/hover-preview-onscreen-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps cross-file hover previews on-screen and dismisses only after leaving node and popup" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps cross-file hover previews on-screen and dismisses only after leaving node and popup" --update-snapshots`
 
 4i. `goal.md` item 14 now has a direct browser contract for the chosen long-label behavior:
    - long unbroken rectangular labels are kept by growing the node, not by clipping the text away
@@ -1157,7 +1157,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - the browser suite also keeps a committed canvas snapshot baseline for that visible growth behavior:
      - `packages/core/tests/browser/render.spec.ts-snapshots/long-label-node-growth-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "grows rectangular nodes to contain long unbroken labels instead of clipping them" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "grows rectangular nodes to contain long unbroken labels instead of clipping them" --update-snapshots`
 
 4j. `goal.md` item 16 now has direct browser proof across the shipped example corpus instead of only one representative graph:
    - the browser suite already checked one representative graph across low, default, and high zoom
@@ -1165,7 +1165,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - shipped example graphs keep rendered label bounds non-overlapping
      - the large stress graph also keeps rendered label bounds non-overlapping while in `stress` mode
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps shipped example labels readable at minimum zoom without collapsing into overlap piles"`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps shipped example labels readable at minimum zoom without collapsing into overlap piles"`
 
 4k. `goal.md` item 17 now proves the rendered arrowhead contract, not only the trimmed route endpoint:
    - the existing browser test already proved simple-flow edge endpoints land on rendered node boundaries
@@ -1176,7 +1176,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - added a committed browser snapshot artifact for the simple-flow boundary/arrowhead state:
      - `edge-endpoints-boundary-simple-flow-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps simple-flow edge endpoints on rendered node boundaries"`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps simple-flow edge endpoints on rendered node boundaries"`
 
 4l. `goal.md` item 57 now has stronger browser proof for the non-color cue side of broken-link state:
    - broken-link badge glyph coverage already proved unresolved targets render a distinct `badgeKind: "broken"` instead of reusing the valid-link cue
@@ -1191,7 +1191,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - committed snapshot baseline:
      - `packages/core/tests/browser/render.spec.ts-snapshots/broken-link-selected-hovered-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps broken-link state visually distinct while the same node is selected and hovered" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps broken-link state visually distinct while the same node is selected and hovered" --update-snapshots`
 
 4m. `goal.md` item 60 now has screenshot-backed browser proof in addition to the existing alpha/state assertions:
    - the browser suite already proved:
@@ -1202,7 +1202,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - `packages/core/tests/browser/render.spec.ts-snapshots/selection-only-node-state-chromium-darwin.png`
      - `packages/core/tests/browser/render.spec.ts-snapshots/selection-hover-coexistence-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps hover and selection as distinct visual states that can coexist" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps hover and selection as distinct visual states that can coexist" --update-snapshots`
 
 4n. `goal.md` item 61 now has screenshot-backed browser proof in addition to the existing relationship-alpha assertions:
    - the browser suite already proved that hover/selection keeps connected neighbors and edges fully legible while unrelated nodes and edges recede
@@ -1210,7 +1210,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - `packages/core/tests/browser/render.spec.ts-snapshots/relationship-hover-emphasis-chromium-darwin.png`
      - `packages/core/tests/browser/render.spec.ts-snapshots/relationship-selection-emphasis-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "emphasizes connected neighbors and edges on hover and selection" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "emphasizes connected neighbors and edges on hover and selection" --update-snapshots`
 
 4o. `goal.md` item 62 now has direct browser evidence in the weakest shipped glow theme (`breath`), not only theme-level contrast math:
    - unit coverage already enforced a minimum perceptibility floor for hover glow and selection stroke across all themes
@@ -1223,7 +1223,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - `hoverAlpha > 0` in the hover case
      - `selectionAlpha > 0` in the selection case
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps hover and selection perceptible in the low-glow breath theme" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps hover and selection perceptible in the low-glow breath theme" --update-snapshots`
 
 4p. `goal.md` item 56 now has screenshot-backed browser proof for the shipped light-theme path:
    - browser state assertions already proved that in a light `prefers-color-scheme` environment:
@@ -1235,7 +1235,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - same scene after forcing dark mode:
        - `packages/core/tests/browser/render.spec.ts-snapshots/narrative-light-to-dark-switch-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "uses the light narrative palette by default when the system color scheme prefers light" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "uses the light narrative palette by default when the system color scheme prefers light" --update-snapshots`
 
 4q. `goal.md` item 63 now has direct browser proof in an actual dimmed-context scene, not only theme-emphasis math:
    - unit coverage already enforced minimum dimmed-text readability and a minimum dimmed alpha floor
@@ -1249,7 +1249,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - committed full-canvas baseline:
      - `packages/core/tests/browser/render.spec.ts-snapshots/narrative-light-dimmed-context-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps dimmed context readable and distinct from hidden in light narrative mode" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps dimmed context readable and distinct from hidden in light narrative mode" --update-snapshots`
 
 4r. `goal.md` item 31 now has screenshot-backed browser proof for live philosophy recolor, not only metric diffs:
    - browser assertions already proved that a live philosophy switch changes:
@@ -1266,14 +1266,14 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - broken-link view after switching to radial:
        - `packages/core/tests/browser/render.spec.ts-snapshots/philosophy-switch-radial-broken-link-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "recolors live node, edge, subgraph, and broken-link states on philosophy switch" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "recolors live node, edge, subgraph, and broken-link states on philosophy switch" --update-snapshots`
 
 4s. `goal.md` item 59 now has screenshot-backed browser proof for nested depth tint rendering, not only fill-value probes:
    - browser metrics already proved every shipped philosophy exposes at least three distinct subgraph depth fills
    - the browser suite now also keeps a committed nested-subgraph canvas baseline in `map`, which is the philosophy where depth tinting is most visually prominent:
      - `packages/core/tests/browser/render.spec.ts-snapshots/subgraph-depth-map-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "applies distinct subgraph depth fills for every shipped philosophy" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "applies distinct subgraph depth fills for every shipped philosophy" --update-snapshots`
 
 4t. `goal.md` item 64 now has screenshot-backed overlap-case proof for emphasis ownership and z-order:
    - browser state assertions already proved:
@@ -1286,14 +1286,14 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - topmost selected node over an occluding sibling:
        - `packages/core/tests/browser/render.spec.ts-snapshots/overlap-topmost-selection-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "uses the topmost node as the hover target when nodes overlap in screen space|keeps the selected top node above an occluding sibling in overlap state" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "uses the topmost node as the hover target when nodes overlap in screen space|keeps the selected top node above an occluding sibling in overlap state" --update-snapshots`
 
 4u. `goal.md` item 15 now has screenshot-backed browser proof in addition to the existing geometry assertions:
    - the non-rectangular shape fixture already asserted label containment within rendered `circle`, `diamond`, and `hexagon` shapes
    - the browser suite now also keeps a committed canvas baseline for that fixture:
      - `packages/core/tests/browser/render.spec.ts-snapshots/nonrectangular-label-fit-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps labels inside rendered non-rectangular shapes" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps labels inside rendered non-rectangular shapes" --update-snapshots`
 
 4v. `goal.md` item 6 now has screenshot-backed browser proof in addition to the existing runtime assertions:
    - invalid Mermaid input was already proven to:
@@ -1303,7 +1303,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - the browser suite now also keeps a committed canvas baseline for that failure state:
      - `packages/core/tests/browser/render.spec.ts-snapshots/invalid-mermaid-error-state-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "shows a readable canvas and UI error state for invalid Mermaid input" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "shows a readable canvas and UI error state for invalid Mermaid input" --update-snapshots`
 
 4w. `goal.md` item 42 and the related init-failure fallback path now have screenshot-backed browser proof:
    - the browser runtime already proved both failure paths surface readable fallback canvas states instead of white-screening
@@ -1313,13 +1313,13 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - explicit no usable GPU backend:
        - `packages/core/tests/browser/render.spec.ts-snapshots/no-gpu-backend-fallback-chromium-darwin.png`
    - verified with:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "shows a readable fallback state when renderer initialization fails|shows a readable fallback state when no usable GPU backend is available" --update-snapshots`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "shows a readable fallback state when renderer initialization fails|shows a readable fallback state when no usable GPU backend is available" --update-snapshots`
 
 4x. `goal.md` item 58 is now guarded more robustly against regressions:
    - the renderer tree was already free of semantic hex literals outside `theme.ts` and `fonts.ts`
    - the enforcing test in `packages/core/src/renderer/__tests__/theme-literals.test.ts` now recurses through the full renderer directory instead of only scanning top-level files
    - verified with:
-     - `pnpm --filter @mermaid-render/core test -- --run src/renderer/__tests__/theme-literals.test.ts`
+     - `pnpm --filter @mermaid-monkey/core test -- --run src/renderer/__tests__/theme-literals.test.ts`
 
 5. `goal.md` item 28 now has direct browser proof for the node/preview side of paint order:
    - node internals are now ordered `shape < label < link badge < hover overlay < selection overlay`
@@ -1347,8 +1347,8 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
       - the settled post-interruption canvas is now also pinned by a committed browser snapshot:
         - `packages/core/tests/browser/render.spec.ts-snapshots/relayout-interruption-settled-clean-chromium-darwin.png`
    - focused verification:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "rapid relayout interruptions settle without leaving partial-alpha scene artifacts behind" --update-snapshots` → passed
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "keeps the stage free of orphaned or duplicate sprites across fold, focus, and philosophy rebuilds|rapid relayout interruptions settle without leaving partial-alpha scene artifacts behind|keeps live relayout motion free of duplicate or orphaned sprites mid-animation|renders a clean mid-relayout frame without double-drawn node artifacts"` → passed
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "rapid relayout interruptions settle without leaving partial-alpha scene artifacts behind" --update-snapshots` → passed
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "keeps the stage free of orphaned or duplicate sprites across fold, focus, and philosophy rebuilds|rapid relayout interruptions settle without leaving partial-alpha scene artifacts behind|keeps live relayout motion free of duplicate or orphaned sprites mid-animation|renders a clean mid-relayout frame without double-drawn node artifacts"` → passed
 
 7. `goal.md` item 32 now has real browser coverage beyond the invalid-input case:
    - the dev harness can load arbitrary inline Mermaid sources through `window.__MERMAID_DEV__.loadSource(...)`
@@ -1416,9 +1416,9 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - bounded max-duration snap
      - non-finite / unreasonable integration recovery
    - verified through the full core gate, not only the spring unit file:
-     - `pnpm --filter @mermaid-render/core test` → `135` passed
-     - `pnpm --filter @mermaid-render/core test:browser` → `37` passed
-     - `pnpm --filter @mermaid-render/core build` passed
+     - `pnpm --filter @mermaid-monkey/core test` → `135` passed
+     - `pnpm --filter @mermaid-monkey/core test:browser` → `37` passed
+     - `pnpm --filter @mermaid-monkey/core build` passed
    - latest measured perf after this pass:
      - representative: `loadMs ≈ 82.9`, `avgFrameMs ≈ 10.65`, `approxFps ≈ 93.94`
      - stress: `loadMs ≈ 249.7`, `avgFrameMs ≈ 9.66`, `approxFps ≈ 103.48`
@@ -1435,9 +1435,9 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - added focused coverage in:
      - `packages/core/src/renderer/__tests__/layout-animator.test.ts`
    - verified through the full core gate:
-     - `pnpm --filter @mermaid-render/core test` → `138` passed
-     - `pnpm --filter @mermaid-render/core test:browser` → `37` passed
-     - `pnpm --filter @mermaid-render/core build` passed
+     - `pnpm --filter @mermaid-monkey/core test` → `138` passed
+     - `pnpm --filter @mermaid-monkey/core test:browser` → `37` passed
+     - `pnpm --filter @mermaid-monkey/core build` passed
    - latest measured perf after this pass:
      - representative: `loadMs ≈ 78.0`, `avgFrameMs ≈ 10.71`, `approxFps ≈ 93.34`
      - stress: `loadMs ≈ 219.4`, `avgFrameMs ≈ 9.73`, `approxFps ≈ 102.74`
@@ -1448,7 +1448,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
 13. `goal.md` item 12 is now verified on the current tree, not just improved in principle:
    - added `pack:check` in `packages/core/package.json`:
      - runs `npm pack --dry-run`
-   - root `verify:core` now includes `pnpm --filter @mermaid-render/core pack:check`
+   - root `verify:core` now includes `pnpm --filter @mermaid-monkey/core pack:check`
    - `.github/workflows/core.yml` already runs `pnpm verify:core`, so PR CI now covers:
      - lint
      - typecheck
@@ -1462,14 +1462,14 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - verified with:
      - `pnpm lint`
      - `pnpm verify:core`
-     - `pnpm --filter @mermaid-render/core pack:check`
+     - `pnpm --filter @mermaid-monkey/core pack:check`
    - current release evidence from the latest gate:
      - browser suite: `49` passed
      - unit suite: `144` passed
      - core ESM: `204.13 KiB` (`209025 bytes`)
      - core CJS: `206.41 KiB` (`211364 bytes`)
      - demo entry: `index-ClSq86KK.js` `474.25 KiB` raw (`485632 bytes`), `136.51 KiB` gzip (`139782 bytes`)
-     - dry-run tarball: `mermaid-render-core-0.1.0.tgz`, package size `277.4 kB`, total files `7`
+     - dry-run tarball: `mermaid-monkey-core-0.1.0.tgz`, package size `277.4 kB`, total files `7`
 
 14. `goal.md` items 37-39 now have stronger direct browser evidence:
    - added preview override hooks in the demo harness (`packages/core/dev/main.ts`) so browser tests can deterministically vary preview source and delay
@@ -1524,7 +1524,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
 18. `goal.md` items 3 and 12 now have a built-artifact static-demo smoke path:
    - added `packages/core/scripts/serve-static-demo.mjs` as a plain static HTTP server for `packages/core/dist-demo/`
    - added `packages/core/playwright.static.config.ts` and `packages/core/tests/browser/static-demo.spec.ts`
-   - added `pnpm --filter @mermaid-render/core test:browser:static-demo`
+   - added `pnpm --filter @mermaid-monkey/core test:browser:static-demo`
    - updated `preview:demo` to use the same plain static server path
    - updated package/root verify scripts and release docs so the built demo is smoke-tested as a static artifact, not only exercised behind the Vite dev server
    - browser proof now covers the built demo artifact for:
@@ -1555,10 +1555,10 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - core ESM: `202.28 KiB` (`207136 bytes`)
      - core CJS: `204.57 KiB` (`209479 bytes`)
      - demo entry: `index-CNnJ3N89.js` `478.06 KiB` raw / `137.36 KiB` gzip
-     - dry-run tarball: `mermaid-render-core-1.0.0.tgz`, package size `274.1 kB`
+     - dry-run tarball: `mermaid-monkey-core-1.0.0.tgz`, package size `274.1 kB`
 
 21. Fresh browser-suite rerun on the current tree is also green after the latest screenshot-proof additions:
-   - `pnpm --filter @mermaid-render/core test:browser` passed
+   - `pnpm --filter @mermaid-monkey/core test:browser` passed
    - browser suite: `77` passed
    - this rerun includes the new artifact-backed cases for:
      - non-rectangular label fit
@@ -1585,7 +1585,7 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
      - core ESM: `201.36 KiB` (`206192 bytes`)
      - core CJS: `203.65 KiB` (`208541 bytes`)
      - demo entry: `index-CNnJ3N89.js` `489.53 KiB` raw (`489536 bytes`) / `137.36 KiB` gzip (`140657 bytes`)
-     - dry-run tarball: `mermaid-render-core-1.0.0.tgz`, package size `274.4 kB`
+     - dry-run tarball: `mermaid-monkey-core-1.0.0.tgz`, package size `274.4 kB`
 
 23. Flowchart-only runtime scope is now enforced explicitly instead of relying on docs alone:
    - `packages/core/src/parser/graph-builder.ts` now rejects non-flowchart Mermaid families with `UNSUPPORTED_DIAGRAM_TYPE`
@@ -1600,11 +1600,11 @@ Continue from `goal.md` toward `@mermaid-render/core` v1 web/demo release. Curre
    - `packages/core/tests/browser/render.spec.ts`
      - added `releases listeners, timers, and canvas ownership state on destroy`
    - focused verification passed:
-     - `pnpm --filter @mermaid-render/core exec playwright test -g "releases listeners, timers, and canvas ownership state on destroy|supports multiple live renderers on one page|guards lifecycle misuse with clear errors"`
+     - `pnpm --filter @mermaid-monkey/core exec playwright test -g "releases listeners, timers, and canvas ownership state on destroy|supports multiple live renderers on one page|guards lifecycle misuse with clear errors"`
    - lifecycle gate also stayed green:
-     - `pnpm --filter @mermaid-render/core test:browser:lifecycle`
+     - `pnpm --filter @mermaid-monkey/core test:browser:lifecycle`
      - `9` passed
-   - `pnpm --filter @mermaid-render/core typecheck` also passed
+   - `pnpm --filter @mermaid-monkey/core typecheck` also passed
    - important scope note:
      - the probe intentionally verifies ownership release via the renderer's live-canvas registry state instead of immediately remounting a new renderer onto the exact same physical canvas inside the same browser turn
      - that narrower check avoids a Chromium/Pixi wedge case while still directly proving the teardown contract we need for item `41`
@@ -1615,9 +1615,9 @@ If context compacts, read this file first, then run:
 
 ```bash
 git status --short
-pnpm --filter @mermaid-render/core typecheck
-pnpm --filter @mermaid-render/core test
-pnpm --filter @mermaid-render/core test:browser
+pnpm --filter @mermaid-monkey/core typecheck
+pnpm --filter @mermaid-monkey/core test
+pnpm --filter @mermaid-monkey/core test:browser
 ```
 
 If the dev server is not running, start it:

@@ -3,7 +3,7 @@ import { BitmapFont } from 'pixi.js'
 let installed = false
 
 // Printable ASCII range + common symbols
-const ASCII_CHARS = ' !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~▶▼'
+const ASCII_CHARS = ' !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~▶▼→★·'
 
 /**
  * Install dynamic BitmapFonts at 4x render resolution.
@@ -38,6 +38,17 @@ export function ensureFontsInstalled(): void {
   })
 
   BitmapFont.install({
+    name: 'MermaidNodeBold',
+    style: {
+      fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+      fontSize: 14 * resolution,
+      fill: 0xf1f5f9,
+      fontWeight: 'bold',
+    },
+    chars: ASCII_CHARS.split(''),
+  })
+
+  BitmapFont.install({
     name: 'MermaidEdge',
     style: {
       fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
@@ -53,6 +64,17 @@ export function ensureFontsInstalled(): void {
       fontFamily: '"JetBrains Mono", "Fira Code", "Courier New", monospace',
       fontSize: 14 * resolution,
       fill: 0xffffff,
+    },
+    chars: ASCII_CHARS.split(''),
+  })
+
+  BitmapFont.install({
+    name: 'MermaidBlueprintBold',
+    style: {
+      fontFamily: '"JetBrains Mono", "Fira Code", "Courier New", monospace',
+      fontSize: 14 * resolution,
+      fill: 0xffffff,
+      fontWeight: 'bold',
     },
     chars: ASCII_CHARS.split(''),
   })

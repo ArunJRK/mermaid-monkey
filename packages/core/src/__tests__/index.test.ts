@@ -30,7 +30,9 @@ describe('public api surface', () => {
       'LoadPipeline',
       'MermaidRenderer',
       'buildGraph',
+      'buildProjectIndex',
       'createVirtualFileResolver',
+      'evaluateGraphLenses',
       'extractDirectives',
       'normalizeDiagramPath',
     ])
@@ -49,6 +51,9 @@ describe('public api surface', () => {
     expect(typeof proto.setThemeOverrides).toBe('function')
     expect(typeof proto.fitToView).toBe('function')
     expect(typeof proto.resetView).toBe('function')
+    expect(typeof proto.getViewportState).toBe('function')
+    expect(typeof proto.restoreViewportState).toBe('function')
+    expect(typeof proto.setView).toBe('function')
     expect(typeof proto.foldNode).toBe('function')
     expect(typeof proto.unfoldNode).toBe('function')
     expect(typeof proto.foldAll).toBe('function')

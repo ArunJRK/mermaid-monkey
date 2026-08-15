@@ -1,6 +1,6 @@
 {
-  "name": "mermaid-render-vscode",
-  "displayName": "Mermaid Render",
+  "name": "mermaid-monkey-vscode",
+  "displayName": "Mermaid Monkey",
   "description": "Interactive Mermaid diagram viewer with zoom, fold, and multi-file support",
   "version": "0.1.0",
   "publisher": "arunjrk",
@@ -42,7 +42,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mermaid-render/core": "workspace:*"
+    "@mermaid-monkey/core": "workspace:*"
   },
   "devDependencies": {
     "@types/vscode": "^1.95.0",

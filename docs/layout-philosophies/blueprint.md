@@ -4,9 +4,9 @@
 
 ## Intent
 
-The diagram is a technical reference. It will be read carefully, not scanned casually. Alignment, symmetry, and precision communicate that "this is authoritative, this is exact." Nothing is accidental — if two nodes are at the same level, that means something. If an edge is horizontal, that means something.
+The diagram is a technical reference for live review. It will be read carefully, discussed, selected, folded, and revisited by a team. Alignment, symmetry, and precision communicate that "this is authoritative, this is exact." Nothing is accidental — if two nodes are at the same level, that means something. If an edge is horizontal, that means something.
 
-Today, think: technical flowcharts, service dependency views, and precise architecture relationships. Future fit includes class diagrams, ER diagrams, C4 Component/Code level, database schemas, API relationship maps, and type hierarchies once parser scope expands beyond `flowchart`.
+Today, think: technical flowcharts, service dependency views, topology maps, and precise architecture relationships. Future fit includes class diagrams, ER diagrams, C4 Component/Code level, database schemas, API relationship maps, and type hierarchies once parser scope expands beyond `flowchart`.
 
 ## Gestalt Principles
 
@@ -49,11 +49,11 @@ Today this means:
 
 ## Visual Identity
 
-Blueprint blue background (#001a33), grid lines (#003366 at 20px intervals), monospace font (JetBrains Mono / Fira Code via BitmapFont), nodes #004080, text white. Isometric feel.
+Deep blueprint background (#00111f), secondary grid lines (#0c416d at 20px intervals), monospace font (JetBrains Mono / Fira Code via BitmapFont), nodes #063b70, white node text, and cyan interaction accents. Groups use a visible header band and count badge so a meeting can move by region before drilling into individual nodes.
 
 ## Spacing
 
-- **Tight and uniform.** Same gap between all adjacent nodes in a rank. Same gap between all ranks. The regularity communicates precision.
+- **Discussion-dense, not cramped.** Same gap between all adjacent nodes in a rank. Same gap between all ranks. The regularity communicates precision, but the default spacing leaves enough room for edge labels, routed wires, and group headers to stay readable in a shared topology review.
 - **Compact node sizing.** Nodes are only as large as their content requires. No padding for aesthetics — padding is for readability.
 - **Edge spacing consistent.** Parallel edges maintain consistent gaps between them.
 

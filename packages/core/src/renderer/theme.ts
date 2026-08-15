@@ -24,10 +24,18 @@ export interface Theme {
   hoverGlow: number
   hoverGlowAlpha: number
   accent: number
+  /**
+   * Accent for comment-kind annotation markers (comment pins), deliberately
+   * distinct from `accent` so callout badges and comment pins read
+   * differently at a glance.
+   */
+  commentAccent: number
   strokeWidth: number
   cornerRadius: number
   /** Dimmed opacity for unfocused elements */
   dimmedAlpha: number
+  /** Stronger dimmed opacity for unrelated elements while hovering a node */
+  hoverDimmedAlpha: number
   messageOverlayBg: number
   messageTitle: string
   messageBody: string
@@ -64,9 +72,11 @@ const NARRATIVE: Theme = {
   hoverGlow: 0x58a6ff,
   hoverGlowAlpha: 0.2,
   accent: 0x58a6ff,
+  commentAccent: 0xf59e0b,
   strokeWidth: 2,
   cornerRadius: 8,
   dimmedAlpha: 0.3,
+  hoverDimmedAlpha: 0.22,
   messageOverlayBg: 0x111827,
   messageTitle: '#f9fafb',
   messageBody: '#9ca3af',
@@ -94,9 +104,11 @@ const NARRATIVE_LIGHT: Theme = {
   hoverGlow: 0x0969da,
   hoverGlowAlpha: 0.16,
   accent: 0x0969da,
+  commentAccent: 0xb45309,
   strokeWidth: 2,
   cornerRadius: 8,
   dimmedAlpha: 0.32,
+  hoverDimmedAlpha: 0.24,
   messageOverlayBg: 0xffffff,
   messageTitle: '#1f2328',
   messageBody: '#57606a',
@@ -125,9 +137,11 @@ const MAP: Theme = {
   hoverGlow: 0xe94560,
   hoverGlowAlpha: 0.25,
   accent: 0xe94560,
+  commentAccent: 0xffa940,
   strokeWidth: 2,
   cornerRadius: 10,
   dimmedAlpha: 0.3,
+  hoverDimmedAlpha: 0.22,
   messageOverlayBg: 0x1a1a2e,
   messageTitle: '#f5f7ff',
   messageBody: '#c7cbe6',
@@ -139,34 +153,36 @@ const MAP: Theme = {
 // ── Blueprint "Grid" ─────────────────────────────────────────────────────────
 const BLUEPRINT: Theme = {
   name: 'Grid',
-  background: 0x001a33,
-  nodeFill: 0x004080,
-  nodeStroke: 0x0066cc,
+  background: 0x00111f,
+  nodeFill: 0x063b70,
+  nodeStroke: 0x2f95dc,
   nodeStrokeSelected: 0x00ffcc,
   brokenLinkAccent: 0xff6b6b,
   nodeText: 0xffffff,
-  edgeColor: 0x0066cc,
-  edgeLabelColor: 0x99ccff,
-  subgraphFill: 0x002b55,
-  subgraphFillAlpha: 0.3,
-  subgraphStroke: 0x0066cc,
-  subgraphStrokeAlpha: 0.5,
-  subgraphLabel: 0x99ccff,
-  subgraphDepthTints: [0x002b55, 0x003d73, 0x00519a],
-  gridColor: 0x003366,
-  gridAlpha: 0.3,
+  edgeColor: 0x42a4e8,
+  edgeLabelColor: 0xb9dfff,
+  subgraphFill: 0x082947,
+  subgraphFillAlpha: 0.46,
+  subgraphStroke: 0x42a4e8,
+  subgraphStrokeAlpha: 0.72,
+  subgraphLabel: 0xf2fbff,
+  subgraphDepthTints: [0x082947, 0x0b385d, 0x0e4975],
+  gridColor: 0x0c416d,
+  gridAlpha: 0.2,
   gridSize: 20,
   hoverGlow: 0x00ffcc,
-  hoverGlowAlpha: 0.2,
+  hoverGlowAlpha: 0.32,
   accent: 0x00ffcc,
+  commentAccent: 0xffb454,
   strokeWidth: 1.5,
   cornerRadius: 4,
-  dimmedAlpha: 0.3,
-  messageOverlayBg: 0x001a33,
+  dimmedAlpha: 0.42,
+  hoverDimmedAlpha: 0.2,
+  messageOverlayBg: 0x00111f,
   messageTitle: '#f8fdff',
   messageBody: '#b8dfff',
-  breadcrumbBg: '#001a33',
-  breadcrumbText: '#99ccff',
+  breadcrumbBg: '#00111f',
+  breadcrumbText: '#b9dfff',
   breadcrumbAccent: '#00ffcc',
 }
 
@@ -190,9 +206,11 @@ const BREATH: Theme = {
   hoverGlow: 0xffffff,
   hoverGlowAlpha: 0.15,
   accent: 0xffffff,
+  commentAccent: 0xffb454,
   strokeWidth: 2.5,
   cornerRadius: 16,
   dimmedAlpha: 0.3,
+  hoverDimmedAlpha: 0.2,
   messageOverlayBg: 0x111111,
   messageTitle: '#f5f5f5',
   messageBody: '#b0b0b0',
@@ -221,9 +239,11 @@ const RADIAL: Theme = {
   hoverGlow: 0xb07aff,
   hoverGlowAlpha: 0.25,
   accent: 0xb07aff,
+  commentAccent: 0xffb454,
   strokeWidth: 2,
   cornerRadius: 12,
   dimmedAlpha: 0.3,
+  hoverDimmedAlpha: 0.22,
   messageOverlayBg: 0x0f0f1a,
   messageTitle: '#f4eeff',
   messageBody: '#c7bddc',
@@ -252,9 +272,11 @@ const MOSAIC: Theme = {
   hoverGlow: 0xff9f43,
   hoverGlowAlpha: 0.2,
   accent: 0xff9f43,
+  commentAccent: 0x4dabf7,
   strokeWidth: 1.5,
   cornerRadius: 8,
   dimmedAlpha: 0.3,
+  hoverDimmedAlpha: 0.22,
   messageOverlayBg: 0x121212,
   messageTitle: '#f3f3f3',
   messageBody: '#b8b8b8',

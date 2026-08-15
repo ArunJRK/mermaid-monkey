@@ -1,8 +1,8 @@
-GOAL: Ship @mermaid-render/core v1.0.0 as a publishable, embeddable WEB rendering
+GOAL: Ship @mermaid-monkey/core v1.0.0 as a publishable, embeddable WEB rendering
   engine + a deployable demo web app. VS Code extension is OUT OF SCOPE this run.
 
   CONTEXT
-  - Monorepo; this run touches only @mermaid-render/core (PixiJS engine) and its
+  - Monorepo; this run touches only @mermaid-monkey/core (PixiJS engine) and its
     web harness (packages/core/dev/index.html, vite dev server on 127.0.0.1:3000).
   - Currently v0.1.0. 116 unit tests pass; core typechecks and builds clean
     (tsup → ~139KB ESM). Branch `main` is ahead of origin; working tree is dirty
@@ -63,7 +63,7 @@ GOAL: Ship @mermaid-render/core v1.0.0 as a publishable, embeddable WEB renderin
       with justification. Report final web bundle size.
   12. CI green on PR: lint + typecheck + unit tests + headless render tests + build +
       `vite build` of the demo. Documented, reproducible npm publish path for
-      @mermaid-render/core and a static-deploy path for the demo app.
+      @mermaid-monkey/core and a static-deploy path for the demo app.
 
   VISUAL & RENDERING QUALITY
   Every item below is a visual invariant that must hold for the example set

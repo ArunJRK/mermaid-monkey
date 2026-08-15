@@ -1,10 +1,10 @@
 # Pain Points — User Validation
 
-Evidence gathered from Mermaid.js GitHub issues (as of March 2026) confirming the problems mermaid-render solves.
+Evidence gathered from Mermaid.js GitHub issues (as of March 2026) confirming the problems Mermaid Monkey solves.
 
 ## Summary
 
-The four core features of mermaid-render each map to highly-requested, unresolved Mermaid issues that have been open for years.
+The four core features of Mermaid Monkey each map to highly-requested, unresolved Mermaid issues that have been open for years.
 
 ## Zoom & Pan
 
@@ -122,7 +122,7 @@ Users can't control how diagrams look. No way to adjust spacing, align nodes, ch
 
 ## Conclusion
 
-The pain is real, documented, highly upvoted, and unresolved for years (some since 2015). mermaid-render addresses the top 5 most-requested categories:
+The pain is real, documented, highly upvoted, and unresolved for years (some since 2015). Mermaid Monkey addresses the top 5 most-requested categories:
 
 1. **Zoom & Pan** — 46+ reactions across multiple issues
 2. **Node Folding** — 23+ reactions

@@ -4,7 +4,7 @@
 
 This repo is a pnpm monorepo. The current v1 release scope ships the web artifacts below:
 
-1. **@mermaid-render/core** — standalone rendering engine (npm library)
+1. **@mermaid-monkey/core** — standalone rendering engine (npm library)
    - Framework-agnostic, renders to any `<canvas>` element
    - No VS Code dependency
    - Publishable on npm for anyone to embed
@@ -13,7 +13,7 @@ This repo is a pnpm monorepo. The current v1 release scope ships the web artifac
    - Plain static-host deployment target
    - Exercises bundled examples, philosophy switching, and browser-side cross-file navigation
 
-The repo also contains `@mermaid-render/vscode` as a future shell, but it is outside the current `goal.md` v1 web release scope.
+The repo also contains `@mermaid-monkey/vscode` as a future shell, but it is outside the current `goal.md` v1 web release scope.
 
 ## Parser: Mermaid + Custom Directive Layer
 
@@ -172,7 +172,7 @@ That higher ceiling is intentional. The demo bundle includes:
 
 Current measured outputs:
 
-- `@mermaid-render/core` build output:
+- `@mermaid-monkey/core` build output:
   - `dist/index.js`: ~`202.86 KiB`
   - `dist/index.cjs`: ~`205.14 KiB`
 - Demo web app entry chunk:

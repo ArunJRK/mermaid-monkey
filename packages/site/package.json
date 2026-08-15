@@ -1,5 +1,5 @@
 {
-  "name": "@mermaid-render/site",
+  "name": "@mermaid-monkey/site",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 4174"
   },
   "dependencies": {
-    "@mermaid-render/core": "workspace:*"
+    "@mermaid-monkey/core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
