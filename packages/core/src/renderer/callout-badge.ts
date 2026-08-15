@@ -116,6 +116,22 @@ export function calloutBadgeSlotAtGlobalPoint(
 }
 
 /**
+ * Each slot's centre in global (canvas-relative screen) coordinates — the
+ * point a pointer event must land on to hit it. The inverse of
+ * `calloutBadgeContainsGlobalPoint`, and the position to anchor a DOM
+ * surface (a hover chip, an opening panel) to a marker.
+ */
+export function calloutBadgeGlobalPoints(
+  host: Container,
+  slots: readonly CalloutBadgeSlot[],
+): { kind: CalloutBadgeKind; x: number; y: number }[] {
+  return slots.map((slot) => {
+    const global = host.toGlobal({ x: slot.badge.x, y: slot.badge.y })
+    return { kind: slot.state.kind, x: global.x, y: global.y }
+  })
+}
+
+/**
  * Host-side hover routing for the markers: tracks pointer movement over the
  * host, applies the hover scale while the pointer is inside a marker's hit
  * circle, and fires enter/leave callbacks exactly once per transition —

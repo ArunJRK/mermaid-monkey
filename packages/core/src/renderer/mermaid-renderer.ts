@@ -1056,6 +1056,44 @@ export class MermaidRenderer {
     return this._calloutBadges.map((badge) => ({ ...badge }))
   }
 
+  /**
+   * Every rendered marker with its centre in canvas-relative screen pixels —
+   * the point a click must land on to hit it. Use it to anchor a DOM surface
+   * to a marker, or to drive a marker from outside the canvas.
+   *
+   * Only markers whose anchor is currently drawn appear: a badge pushed for a
+   * folded-away node has no position until that node is rendered.
+   */
+  getCalloutBadgePoints(): (CalloutBadgeSpec & { x: number; y: number })[] {
+    const points: (CalloutBadgeSpec & { x: number; y: number })[] = []
+    const collect = (
+      anchorKind: CalloutAnchorKind,
+      anchorId: string,
+      host: {
+        getCalloutBadgePoints(): { kind: CalloutBadgeKind; x: number; y: number }[]
+      },
+    ) => {
+      for (const point of host.getCalloutBadgePoints()) {
+        const spec = this._calloutBadges.find(
+          (badge) =>
+            badge.anchorKind === anchorKind
+            && badge.anchorId === anchorId
+            && this._specKind(badge) === point.kind,
+        )
+        if (spec) points.push({ ...spec, x: point.x, y: point.y })
+      }
+    }
+
+    for (const [id, sprite] of this._nodeSprites) collect('node', id, sprite)
+    for (const [id, container] of this._subgraphContainers) {
+      collect('subgraph', id, container)
+    }
+    for (const edgeGraphic of this._edgeGraphics) {
+      collect('edge', edgeGraphic.data.id, edgeGraphic)
+    }
+    return points
+  }
+
   /** The marker kind a spec declares (omitted means `'callout'`). */
   private _specKind(spec: CalloutBadgeSpec): CalloutBadgeKind {
     return spec.kind ?? 'callout'

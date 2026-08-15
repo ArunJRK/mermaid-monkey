@@ -21,6 +21,7 @@ import {
 import {
   CALLOUT_BADGE_HIT_RADIUS,
   type CalloutBadgeSlot,
+  calloutBadgeGlobalPoints,
   calloutBadgeSlotAtGlobalPoint,
   type CalloutBadgeState,
   computeNodeCalloutBadgePosition,
@@ -646,6 +647,11 @@ export class NodeSprite extends Container {
   getCalloutBadgeAt(globalX: number, globalY: number): CalloutBadgeState | null {
     return calloutBadgeSlotAtGlobalPoint(this, this._calloutSlots, globalX, globalY)
       ?.state ?? null
+  }
+
+  /** Each marker's centre in global coordinates (see `calloutBadgeGlobalPoints`). */
+  getCalloutBadgePoints(): { kind: CalloutBadgeKind; x: number; y: number }[] {
+    return calloutBadgeGlobalPoints(this, this._calloutSlots)
   }
 
   /** Emit a marker's `callout:click` (host-routed tap; see module doc). */

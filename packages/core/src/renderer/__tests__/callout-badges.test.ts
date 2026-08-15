@@ -131,6 +131,20 @@ describe('NodeSprite callout badge', () => {
     expect(sprite.getCalloutBadgeDebug()).toBeNull()
   })
 
+  it('reports each badge at a point that hits it', async () => {
+    const { sprite } = await makeSprite()
+    sprite.setCalloutBadges([{ kind: 'callout' }, { kind: 'comment' }])
+
+    const points = sprite.getCalloutBadgePoints()
+    expect(points.map((point) => point.kind)).toEqual(['callout', 'comment'])
+
+    // The whole point of the API: what it reports is what a pointer must
+    // hit, so feeding each point back through the hit test finds that badge.
+    for (const point of points) {
+      expect(sprite.getCalloutBadgeAt(point.x, point.y)?.kind).toBe(point.kind)
+    }
+  })
+
   it('survives an internal rebuild (theme/appearance update)', async () => {
     const { sprite } = await makeSprite()
     sprite.setCalloutBadges([{ kind: 'callout' }])

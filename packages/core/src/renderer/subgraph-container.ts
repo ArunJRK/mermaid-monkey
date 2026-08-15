@@ -5,6 +5,7 @@ import { getSubgraphDepthFill, type Theme } from './theme'
 import { measureTextWidth } from '../layout/text-measure'
 import {
   type CalloutBadgeSlot,
+  calloutBadgeGlobalPoints,
   calloutBadgeSlotAtGlobalPoint,
   type CalloutBadgeState,
   computeSubgraphCalloutBadgePosition,
@@ -213,6 +214,11 @@ export class SubgraphContainer extends Container {
   getCalloutBadgeAt(globalX: number, globalY: number): CalloutBadgeState | null {
     return calloutBadgeSlotAtGlobalPoint(this, this._calloutSlots, globalX, globalY)
       ?.state ?? null
+  }
+
+  /** Each marker's centre in global coordinates (see `calloutBadgeGlobalPoints`). */
+  getCalloutBadgePoints(): { kind: CalloutBadgeKind; x: number; y: number }[] {
+    return calloutBadgeGlobalPoints(this, this._calloutSlots)
   }
 
   /** Emit a marker's `callout:click` (host-routed tap; see callout-badge doc). */
